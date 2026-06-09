@@ -5,11 +5,19 @@ import type { AgentLogItem, AgentRunState, CaseListItem, StreamEvent } from "../
 function toCaseListItem(
   item: Awaited<ReturnType<typeof api.listCases>>[number]
 ): CaseListItem {
+  const steps = [...(item.steps ?? [])]
+    .sort((a, b) => a.step_order - b.step_order)
+    .map((step) => ({
+      step_order: step.step_order,
+      step_type: step.step_type,
+      description: step.description,
+    }));
   return {
     id: item.id!,
     name: item.name,
-    step_count: item.steps?.length ?? 0,
+    step_count: steps.length,
     updated_at: item.updated_at ?? new Date().toISOString(),
+    steps,
   };
 }
 

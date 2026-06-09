@@ -1,8 +1,15 @@
+export interface CaseStepPreview {
+  step_order: number;
+  step_type?: string;
+  description: string;
+}
+
 export interface CaseListItem {
   id: number;
   name: string;
   step_count: number;
   updated_at: string;
+  steps: CaseStepPreview[];
 }
 
 export interface ActionIntent {
@@ -20,6 +27,16 @@ export interface VerificationResult {
   success: boolean;
   confidence?: number;
   reasoning?: string;
+}
+
+export interface StepAttemptRecord {
+  step_order: number;
+  attempt_index: number;
+  before_image?: string | null;
+  before_image_annotated?: string | null;
+  after_image?: string | null;
+  status: string;
+  error?: string | null;
 }
 
 export interface AgentStepRecord {
@@ -47,6 +64,7 @@ export interface AgentRunState {
   max_retries: number;
   error?: string | null;
   steps: AgentStepRecord[];
+  attempts: StepAttemptRecord[];
   created_at: string;
   updated_at: string;
 }

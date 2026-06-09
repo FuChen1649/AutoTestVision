@@ -1,25 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentApi } from "../api/agent";
 import { isApiOfflineError } from "../api/http";
-import type { AgentLogItem, AgentRunState, AgentStepRecord, CaseListItem } from "../types/agent";
+import AgentExecutionGallery from "../components/AgentExecutionGallery";
+import type { AgentLogItem, AgentRunState, CaseListItem } from "../types/agent";
 import "./AgentTestPage.css";
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
-}
-
-function pickDisplayStep(run: AgentRunState | null): AgentStepRecord | null {
-  if (!run?.steps.length) {
-    return null;
-  }
-  const running = run.steps.find((step) => step.status === "running");
-  if (running) {
-    return running;
-  }
-  const withImages = [...run.steps].reverse().find(
-    (step) => step.before_image_annotated || step.before_image || step.after_image
-  );
-  return withImages ?? run.steps[Math.max(0, run.current_step_index - 1)] ?? null;
 }
 
 export default function AgentTestPage() {
@@ -35,7 +22,21 @@ export default function AgentTestPage() {
   const [error, setError] = useState<string | null>(null);
   const [agentReady, setAgentReady] = useState(true);
 
-  const displayStep = useMemo(() => pickDisplayStep(run), [run]);
+  const executionAttempts = useMemo(() => run?.attempts ?? [], [run]);
+
+  const activeStepOrder = useMemo(() => {
+    if (!run || !["running", "pending"].includes(run.status)) {
+      return null;
+    }
+    const runningStep = run.steps.find((step) => step.status === "running");
+    if (runningStep) {
+      return runningStep.step_order;
+    }
+    if (run.current_step_index < run.total_steps) {
+      return run.current_step_index;
+    }
+    return null;
+  }, [run]);
 
   const loadCases = useCallback(async () => {
     setLoadingCases(true);
@@ -134,7 +135,8 @@ export default function AgentTestPage() {
           <span className="agent-test-toolbar-title">Agent 测试执行</span>
           {run && (
             <span className="agent-test-run-badge">
-              {run.case_name} · {run.status} · 步骤 {run.current_step_index}/{run.total_steps}
+              {run.case_name} · {run.status} · 步骤{" "}
+              {(activeStepOrder ?? run.current_step_index) + 1}/{run.total_steps}
             </span>
           )}
         </div>
@@ -175,24 +177,51 @@ export default function AgentTestPage() {
               <div className="agent-panel-empty">暂无已保存 Case</div>
             )}
             <ul className="agent-case-list">
-              {cases.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className={
-                      selectedCaseId === item.id
-                        ? "agent-case-item agent-case-item-active"
-                        : "agent-case-item"
-                    }
-                    onClick={() => setSelectedCaseId(item.id)}
+              {cases.map((item) => {
+                const isSelected = selectedCaseId === item.id;
+                const isRunningCase = run?.case_id === item.id;
+                return (
+                  <li
+                    key={item.id}
+                    className={isSelected ? "agent-case-block agent-case-block-active" : "agent-case-block"}
                   >
-                    <strong>{item.name}</strong>
-                    <span>
-                      #{item.id} · {item.step_count} 步
-                    </span>
-                  </button>
-                </li>
-              ))}
+                    <button
+                      type="button"
+                      className={isSelected ? "agent-case-item agent-case-item-active" : "agent-case-item"}
+                      onClick={() => setSelectedCaseId(item.id)}
+                    >
+                      <strong>{item.name}</strong>
+                      <span>
+                        #{item.id} · {item.step_count} 步
+                      </span>
+                    </button>
+                    {isSelected && item.steps.length > 0 && (
+                      <ol className="agent-case-steps">
+                        {item.steps.map((step) => {
+                          const runStep = isRunningCase
+                            ? run?.steps.find((record) => record.step_order === step.step_order)
+                            : null;
+                          const isActive = isRunningCase && activeStepOrder === step.step_order;
+                          const stepClass = [
+                            "agent-case-step",
+                            isActive ? "agent-case-step-running" : "",
+                            runStep?.status === "success" ? "agent-case-step-success" : "",
+                            runStep?.status === "failed" ? "agent-case-step-failed" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ");
+                          return (
+                            <li key={step.step_order} className={stepClass}>
+                              <span className="agent-case-step-index">{step.step_order + 1}</span>
+                              <span className="agent-case-step-desc">{step.description}</span>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </section>
@@ -244,33 +273,10 @@ export default function AgentTestPage() {
         <section className="agent-panel agent-panel-images">
           <header className="agent-panel-header">
             <h3>执行截图</h3>
-            <span>执行前标注 / 执行后对比</span>
+            <span>全程记录 · 点击放大</span>
           </header>
           <div className="agent-panel-body agent-image-body">
-            {!displayStep && <div className="agent-panel-empty">执行后将显示截图</div>}
-            {displayStep && (
-              <div className="agent-image-grid">
-                <figure className="agent-image-card">
-                  <figcaption>执行前（含操作标注）</figcaption>
-                  {displayStep.before_image_annotated || displayStep.before_image ? (
-                    <img
-                      src={displayStep.before_image_annotated || displayStep.before_image || ""}
-                      alt="执行前截图"
-                    />
-                  ) : (
-                    <div className="agent-image-placeholder">暂无</div>
-                  )}
-                </figure>
-                <figure className="agent-image-card">
-                  <figcaption>执行后</figcaption>
-                  {displayStep.after_image ? (
-                    <img src={displayStep.after_image} alt="执行后截图" />
-                  ) : (
-                    <div className="agent-image-placeholder">暂无</div>
-                  )}
-                </figure>
-              </div>
-            )}
+            <AgentExecutionGallery attempts={executionAttempts} />
           </div>
         </section>
       </div>

@@ -246,6 +246,9 @@ class AgentTestService:
                 )
 
         elif node_name == "capture_before" and step_record:
+            await agent_repository.create_attempt(
+                db, run, step_record.step_order, step_record.before_image
+            )
             await agent_repository.update_step(
                 db,
                 run,
@@ -280,6 +283,12 @@ class AgentTestService:
                 intent=intent,
                 before_image_annotated=annotated,
             )
+            await agent_repository.update_latest_attempt(
+                db,
+                run,
+                step_record.step_order,
+                before_image_annotated=annotated,
+            )
             step_record.before_image_annotated = annotated
 
         elif node_name == "execute_action" and step_record and step_record.intent:
@@ -295,6 +304,12 @@ class AgentTestService:
 
         elif node_name == "capture_after" and step_record:
             await agent_repository.update_step(
+                db,
+                run,
+                step_record.step_order,
+                after_image=step_record.after_image,
+            )
+            await agent_repository.update_latest_attempt(
                 db,
                 run,
                 step_record.step_order,
@@ -324,6 +339,13 @@ class AgentTestService:
                 step_record.step_order,
                 status=step_record.status,
                 verification=verification,
+                error=step_record.error,
+            )
+            await agent_repository.update_latest_attempt(
+                db,
+                run,
+                step_record.step_order,
+                status=step_record.status,
                 error=step_record.error,
             )
 

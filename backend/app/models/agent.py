@@ -31,6 +31,12 @@ class AgentRun(Base):
     logs: Mapped[list["AgentLog"]] = relationship(
         "AgentLog", back_populates="run", cascade="all, delete-orphan", order_by="AgentLog.created_at"
     )
+    attempts: Mapped[list["AgentRunStepAttempt"]] = relationship(
+        "AgentRunStepAttempt",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="AgentRunStepAttempt.step_order,AgentRunStepAttempt.attempt_index",
+    )
 
 
 class AgentRunStep(Base):
@@ -69,3 +75,20 @@ class AgentLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     run: Mapped["AgentRun"] = relationship("AgentRun", back_populates="logs")
+
+
+class AgentRunStepAttempt(Base):
+    __tablename__ = "agent_run_step_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    before_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    before_image_annotated: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    run: Mapped["AgentRun"] = relationship("AgentRun", back_populates="attempts")

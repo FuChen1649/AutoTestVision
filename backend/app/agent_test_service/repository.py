@@ -10,10 +10,11 @@ from app.agent_test_service.schemas import (
     ActionIntent,
     AgentLogItem,
     RunStateResponse,
+    StepAttemptRecord,
     StepExecutionRecord,
     VerificationResult,
 )
-from app.models.agent import AgentLog, AgentRun, AgentRunStep
+from app.models.agent import AgentLog, AgentRun, AgentRunStep, AgentRunStepAttempt
 from app.models.case import Case
 
 
@@ -58,7 +59,11 @@ class AgentRepository:
     async def get_run_by_uuid(self, db: AsyncSession, run_uuid: str) -> AgentRun | None:
         result = await db.execute(
             select(AgentRun)
-            .options(selectinload(AgentRun.steps), selectinload(AgentRun.logs))
+            .options(
+                selectinload(AgentRun.steps),
+                selectinload(AgentRun.logs),
+                selectinload(AgentRun.attempts),
+            )
             .where(AgentRun.run_uuid == run_uuid)
         )
         return result.scalar_one_or_none()
@@ -112,6 +117,79 @@ class AgentRepository:
     async def commit(self, db: AsyncSession) -> None:
         await db.commit()
 
+    async def create_attempt(
+        self,
+        db: AsyncSession,
+        run: AgentRun,
+        step_order: int,
+        before_image: str | None,
+    ) -> AgentRunStepAttempt:
+        existing = [item for item in run.attempts if item.step_order == step_order]
+        attempt_index = len(existing)
+        attempt = AgentRunStepAttempt(
+            run_id=run.id,
+            step_order=step_order,
+            attempt_index=attempt_index,
+            before_image=before_image,
+            status="running",
+        )
+        db.add(attempt)
+        run.attempts.append(attempt)
+        await db.flush()
+        return attempt
+
+    async def update_latest_attempt(
+        self,
+        db: AsyncSession,
+        run: AgentRun,
+        step_order: int,
+        **fields,
+    ) -> AgentRunStepAttempt | None:
+        attempts = sorted(
+            [item for item in run.attempts if item.step_order == step_order],
+            key=lambda item: item.attempt_index,
+        )
+        if not attempts:
+            return None
+        attempt = attempts[-1]
+        for key, value in fields.items():
+            setattr(attempt, key, value)
+        await db.flush()
+        return attempt
+
+    def _attempts_to_records(self, run: AgentRun) -> list[StepAttemptRecord]:
+        records = [
+            StepAttemptRecord(
+                step_order=item.step_order,
+                attempt_index=item.attempt_index,
+                before_image=item.before_image,
+                before_image_annotated=item.before_image_annotated,
+                after_image=item.after_image,
+                status=item.status,
+                error=item.error,
+            )
+            for item in sorted(run.attempts, key=lambda row: (row.step_order, row.attempt_index))
+        ]
+        if records:
+            return records
+
+        fallback: list[StepAttemptRecord] = []
+        for step in sorted(run.steps, key=lambda item: item.step_order):
+            if not (step.before_image or step.before_image_annotated or step.after_image):
+                continue
+            fallback.append(
+                StepAttemptRecord(
+                    step_order=step.step_order,
+                    attempt_index=0,
+                    before_image=step.before_image,
+                    before_image_annotated=step.before_image_annotated,
+                    after_image=step.after_image,
+                    status=step.status if step.status in {"success", "failed"} else "running",
+                    error=step.error,
+                )
+            )
+        return fallback
+
     def to_response(self, run: AgentRun) -> RunStateResponse:
         steps: list[StepExecutionRecord] = []
         for step in sorted(run.steps, key=lambda item: item.step_order):
@@ -153,6 +231,7 @@ class AgentRepository:
             max_retries=run.max_retries,
             error=run.error,
             steps=steps,
+            attempts=self._attempts_to_records(run),
             created_at=run.created_at,
             updated_at=run.updated_at,
         )

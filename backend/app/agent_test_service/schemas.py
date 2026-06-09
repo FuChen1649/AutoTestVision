@@ -25,6 +25,16 @@ class VerificationResult(BaseModel):
     reasoning: str = ""
 
 
+class StepAttemptRecord(BaseModel):
+    step_order: int
+    attempt_index: int
+    before_image: str | None = None
+    before_image_annotated: str | None = None
+    after_image: str | None = None
+    status: str = "running"
+    error: str | None = None
+
+
 class StepExecutionRecord(BaseModel):
     step_order: int
     step_type: str
@@ -74,6 +84,7 @@ class RunStateResponse(BaseModel):
     max_retries: int
     error: str | None = None
     steps: list[StepExecutionRecord] = Field(default_factory=list)
+    attempts: list[StepAttemptRecord] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

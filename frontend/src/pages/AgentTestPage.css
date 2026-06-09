@@ -152,6 +152,96 @@
   background: rgba(37, 99, 235, 0.12);
 }
 
+.agent-case-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.agent-case-block-active .agent-case-item {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.agent-case-steps {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #2563eb;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.agent-case-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: #111827;
+}
+
+.agent-case-step-index {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: #1f2937;
+  color: #9ca3af;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.agent-case-step-desc {
+  flex: 1;
+  min-width: 0;
+  color: #d1d5db;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.agent-case-step-running {
+  border-color: #16a34a;
+  background: rgba(22, 163, 74, 0.18);
+}
+
+.agent-case-step-running .agent-case-step-index {
+  background: #16a34a;
+  color: #ecfdf5;
+}
+
+.agent-case-step-running .agent-case-step-desc {
+  color: #bbf7d0;
+  font-weight: 500;
+}
+
+.agent-case-step-success {
+  opacity: 0.72;
+}
+
+.agent-case-step-success .agent-case-step-index {
+  background: rgba(22, 163, 74, 0.35);
+  color: #86efac;
+}
+
+.agent-case-step-failed {
+  border-color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
+}
+
+.agent-case-step-failed .agent-case-step-desc {
+  color: #fecaca;
+}
+
 .agent-log-body {
   padding: 8px;
   display: flex;
@@ -194,51 +284,122 @@
 }
 
 .agent-image-body {
-  padding: 10px;
+  padding: 8px;
 }
 
-.agent-image-grid {
+.agent-execution-gallery {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  height: 100%;
-  min-height: 0;
 }
 
-.agent-image-card {
+.agent-attempt-card {
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #111827;
+  overflow: hidden;
+}
+
+.agent-attempt-failed {
+  border-color: rgba(220, 38, 38, 0.45);
+}
+
+.agent-attempt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #1f2937;
+  background: #0f172a;
+}
+
+.agent-attempt-header strong {
+  color: #f3f4f6;
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.agent-attempt-status {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #1f2937;
+  color: #9ca3af;
+}
+
+.agent-attempt-status-success {
+  background: rgba(22, 163, 74, 0.2);
+  color: #86efac;
+}
+
+.agent-attempt-status-failed {
+  background: rgba(220, 38, 38, 0.2);
+  color: #fca5a5;
+}
+
+.agent-attempt-status-running {
+  background: rgba(37, 99, 235, 0.2);
+  color: #93c5fd;
+}
+
+.agent-attempt-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px;
+}
+
+.agent-attempt-shot {
+  margin: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  margin: 0;
+  gap: 4px;
 }
 
-.agent-image-card figcaption {
-  flex-shrink: 0;
-  margin-bottom: 6px;
-  color: #9ca3af;
-  font-size: 0.78rem;
+.agent-attempt-shot figcaption {
+  color: #6b7280;
+  font-size: 0.72rem;
 }
 
-.agent-image-card img {
+.agent-attempt-image-btn {
+  display: block;
   width: 100%;
-  height: 100%;
-  min-height: 100px;
-  max-height: 240px;
-  object-fit: contain;
+  padding: 0;
   border: 1px solid #374151;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #030712;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.agent-attempt-image-btn img {
+  display: block;
+  width: 100%;
+  height: 110px;
+  object-fit: contain;
+}
+
+.agent-attempt-image-btn:hover {
+  border-color: #60a5fa;
+}
+
+.agent-attempt-error {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: #fca5a5;
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
 
 .agent-image-placeholder {
-  flex: 1;
-  min-height: 120px;
+  min-height: 110px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px dashed #374151;
-  border-radius: 8px;
+  border-radius: 6px;
   color: #6b7280;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
