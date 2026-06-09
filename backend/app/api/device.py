@@ -1,7 +1,10 @@
 import asyncio
 import base64
+import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.device import (
     AppInfo,
@@ -20,7 +23,14 @@ router = APIRouter(prefix="/device", tags=["device"])
 
 @router.get("/list", response_model=list[DeviceInfo])
 async def list_devices() -> list[DeviceInfo]:
-    return await asyncio.to_thread(adb_service.list_devices)
+    try:
+        devices = await asyncio.to_thread(adb_service.list_devices)
+        if not devices:
+            logger.info("device/list 返回空列表（ADB 未检测到就绪设备）")
+        return devices
+    except RuntimeError as exc:
+        logger.warning("device/list 失败: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/select/{serial}")

@@ -31,13 +31,14 @@ if not exist "frontend\node_modules" (
     echo.
 )
 
-echo [1/2] 启动后端  http://localhost:8000
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
+echo [1/2] 启动后端  http://localhost:8099
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8099" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
 start "AutoTestVision-Backend" cmd /k "cd /d "%~dp0backend" && .venv\Scripts\python.exe run.py"
 
 timeout /t 2 /nobreak >nul
 
-echo [2/2] 启动前端  http://localhost:5173
+echo [2/2] 启动前端  http://localhost:5179
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5179" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
 start "AutoTestVision-Frontend" cmd /k "cd /d "%~dp0frontend" && npm run dev"
 
 echo.
@@ -45,6 +46,6 @@ echo 前后端已在新窗口中启动。
 echo 关闭对应窗口即可停止服务。
 echo 3 秒后自动打开浏览器...
 timeout /t 3 /nobreak >nul
-start "" http://localhost:5173
+start "" http://localhost:5179
 
 exit

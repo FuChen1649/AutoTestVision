@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import CaseBuilder from "../components/CaseBuilder";
 import DeviceScreen from "../components/DeviceScreen";
@@ -46,32 +46,58 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
 
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
+  const [deviceLoading, setDeviceLoading] = useState(true);
+  const selectedSerialRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedSerialRef.current = selectedSerial;
+  }, [selectedSerial]);
 
   const refreshDevices = useCallback(async () => {
     try {
       const list = await api.listDevices();
-      setDevices((prev) => {
-        const same =
-          prev.length === list.length &&
-          prev.every(
-            (device, index) =>
-              device.serial === list[index]?.serial && device.model === list[index]?.model
-          );
-        return same ? prev : list;
-      });
-      if (list.length > 0 && !selectedSerial) {
-        setSelectedSerial(list[0].serial);
-        await api.selectDevice(list[0].serial);
+      setDevices(list);
+
+      if (list.length > 0) {
+        const current = selectedSerialRef.current;
+        const nextSerial =
+          current && list.some((device) => device.serial === current)
+            ? current
+            : list[0].serial;
+
+        if (nextSerial !== current) {
+          setSelectedSerial(nextSerial);
+          selectedSerialRef.current = nextSerial;
+        }
+
+        await api.selectDevice(nextSerial);
+      } else if (!selectedSerialRef.current) {
+        setSelectedSerial(null);
       }
     } catch {
-      setDevices((prev) => (prev.length === 0 ? prev : []));
+      // 静默失败，界面保持「未连接」，由用户点击刷新
+    } finally {
+      setDeviceLoading(false);
     }
-  }, [selectedSerial]);
+  }, []);
 
   useEffect(() => {
     void refreshDevices();
-    const timer = window.setInterval(() => void refreshDevices(), 5000);
-    return () => window.clearInterval(timer);
+
+    let fastAttempts = 0;
+    const fastTimer = window.setInterval(() => {
+      fastAttempts += 1;
+      void refreshDevices();
+      if (fastAttempts >= 12) {
+        window.clearInterval(fastTimer);
+      }
+    }, 1000);
+
+    const slowTimer = window.setInterval(() => void refreshDevices(), 5000);
+    return () => {
+      window.clearInterval(fastTimer);
+      window.clearInterval(slowTimer);
+    };
   }, [refreshDevices]);
 
   const handleSelectDevice = async (serial: string) => {
@@ -195,6 +221,8 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
       <DeviceScreen
         devices={devices}
         selectedSerial={selectedSerial}
+        deviceLoading={deviceLoading}
+        onRefreshDevices={refreshDevices}
         onSelectDevice={handleSelectDevice}
         onPermissionPresetAdded={handleAddPermissionPresetStep}
       />

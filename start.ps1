@@ -26,15 +26,17 @@ if (-not (Test-Path $NodeModules)) {
     Write-Host ""
 }
 
-Write-Host "[1/2] 启动后端  http://localhost:8000"
-Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
+Write-Host "[1/2] 启动后端  http://localhost:8099"
+Get-NetTCPConnection -LocalPort 8099 -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 $backendCmd = 'cd /d "' + $Root + '\backend" & .venv\Scripts\python.exe run.py'
 Start-Process cmd.exe -ArgumentList '/k', $backendCmd -WindowStyle Normal
 
 Start-Sleep -Seconds 2
 
-Write-Host "[2/2] 启动前端  http://localhost:5173"
+Write-Host "[2/2] 启动前端  http://localhost:5179"
+Get-NetTCPConnection -LocalPort 5179 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 $frontendCmd = 'cd /d "' + $Root + '\frontend" & npm run dev'
 Start-Process cmd.exe -ArgumentList '/k', $frontendCmd -WindowStyle Normal
 
@@ -43,4 +45,4 @@ Write-Host "前后端已在新窗口中启动。"
 Write-Host "关闭对应窗口即可停止服务。"
 Write-Host "3 秒后自动打开浏览器..."
 Start-Sleep -Seconds 3
-Start-Process "http://localhost:5173"
+Start-Process "http://localhost:5179"

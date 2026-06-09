@@ -2,12 +2,12 @@
 
 在 backend 目录下执行：
     .venv\\Scripts\\python.exe -m app.agent_test_service.run_agent_service
-    .venv\\Scripts\\python.exe app/agent_test_service/run_agent_service.py --port 8002
+    .venv\\Scripts\\python.exe app/agent_test_service/run_agent_service.py --port 8100
 
 启动后会：
   1. 创建 backend/logs/agent_service_<时间戳>.log
   2. 自检数据库、路由、LLM/ADB 配置
-  3. 仅暴露 /api/agent-test/* 接口（默认端口 8002）
+  3. 仅暴露 /api/agent-test/* 接口（默认端口 8100，主后端为 8099）
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def create_agent_app() -> FastAPI:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="独立启动 AutoTestVision Agent 服务")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址，默认 0.0.0.0")
-    parser.add_argument("--port", type=int, default=8002, help="监听端口，默认 8002")
+    parser.add_argument("--port", type=int, default=8100, help="监听端口，默认 8100")
     return parser.parse_args()
 
 

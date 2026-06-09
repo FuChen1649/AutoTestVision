@@ -6,6 +6,8 @@ import type { DeviceInfo, ScreenFrame } from "../types";
 interface DeviceScreenProps {
   devices: DeviceInfo[];
   selectedSerial: string | null;
+  deviceLoading?: boolean;
+  onRefreshDevices?: () => void;
   onSelectDevice: (serial: string) => void;
   onPermissionPresetAdded: () => void;
 }
@@ -37,6 +39,8 @@ const LONG_PRESS_DURATION_MS = 800;
 export default function DeviceScreen({
   devices,
   selectedSerial,
+  deviceLoading = false,
+  onRefreshDevices,
   onSelectDevice,
   onPermissionPresetAdded,
 }: DeviceScreenProps) {
@@ -239,7 +243,7 @@ export default function DeviceScreen({
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data) as ScreenFrame;
       if (data.type === "error") {
-        setError(data.message ?? "设备连接异常");
+        setConnected(false);
         return;
       }
       if (data.image && data.width && data.height) {
@@ -250,7 +254,6 @@ export default function DeviceScreen({
 
     socket.onerror = () => {
       setConnected(false);
-      setError("屏幕流连接失败");
     };
 
     socket.onclose = () => {
@@ -435,13 +438,25 @@ export default function DeviceScreen({
           </span>
         </div>
 
-        <AppPermissionControls
-          devices={devices}
-          serial={selectedSerial}
-          onSelectDevice={onSelectDevice}
-          onMessage={setPermissionMessage}
-          onPermissionPresetAdded={onPermissionPresetAdded}
-        />
+        <div className="device-toolbar-row">
+          <AppPermissionControls
+            devices={devices}
+            serial={selectedSerial}
+            onSelectDevice={onSelectDevice}
+            onMessage={setPermissionMessage}
+            onPermissionPresetAdded={onPermissionPresetAdded}
+          />
+          {onRefreshDevices && (
+            <button
+              className="secondary-btn device-refresh-btn"
+              type="button"
+              title="刷新设备列表"
+              onClick={() => void onRefreshDevices()}
+            >
+              刷新
+            </button>
+          )}
+        </div>
         {permissionMessage && <div className="permission-message">{permissionMessage}</div>}
       </header>
 
@@ -458,8 +473,8 @@ export default function DeviceScreen({
           />
           {!selectedSerial && (
             <div className="device-placeholder">
-              <p>未检测到设备</p>
-              <p>请通过 USB 连接手机并运行 adb devices 确认</p>
+              <p>{deviceLoading ? "正在连接..." : "未连接"}</p>
+              <p>请连接设备后点击「刷新」</p>
             </div>
           )}
         </div>

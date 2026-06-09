@@ -43,7 +43,7 @@ AutoTestVision/
 start.bat
 ```
 
-会自动打开两个窗口分别运行后端和前端，并打开浏览器访问 http://localhost:5173 。
+会自动打开两个窗口分别运行后端和前端，并打开浏览器访问 http://localhost:5179 。
 
 PowerShell 环境也可执行：
 
@@ -73,7 +73,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-后端默认运行在 http://localhost:8000
+后端默认运行在 http://localhost:8099
 
 ### 3. 手动启动前端（可选）
 
@@ -83,7 +83,7 @@ npm install
 npm run dev
 ```
 
-前端默认运行在 http://localhost:5173
+前端默认运行在 http://localhost:5179
 
 ### 4. 连接 Android 设备
 

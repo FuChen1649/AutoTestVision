@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { readApiResponse } from "./http";
 import type { AgentLogItem, AgentRunState, CaseListItem, StreamEvent } from "../types/agent";
 
 function toCaseListItem(
@@ -14,34 +15,12 @@ function toCaseListItem(
 
 const API_BASE = "/api/agent-test";
 
-function parseError(detail: string, status: number): string {
-  try {
-    const payload = JSON.parse(detail) as { detail?: string };
-    if (payload.detail) {
-      if (status === 404 && payload.detail === "Not Found") {
-        return "Agent 接口未就绪，请关闭旧的后端窗口后重新运行 start.bat";
-      }
-      return payload.detail;
-    }
-  } catch {
-    // ignore
-  }
-  return detail || `请求失败: ${status}`;
-}
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(parseError(detail, response.status));
-  }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return response.json() as Promise<T>;
+  return readApiResponse<T>(response);
 }
 
 export const agentApi = {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentApi } from "../api/agent";
+import { isApiOfflineError } from "../api/http";
 import type { AgentLogItem, AgentRunState, AgentStepRecord, CaseListItem } from "../types/agent";
 import "./AgentTestPage.css";
 
@@ -32,7 +33,6 @@ export default function AgentTestPage() {
   const [loadingCases, setLoadingCases] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
   const [agentReady, setAgentReady] = useState(true);
 
   const displayStep = useMemo(() => pickDisplayStep(run), [run]);
@@ -40,7 +40,6 @@ export default function AgentTestPage() {
   const loadCases = useCallback(async () => {
     setLoadingCases(true);
     setError(null);
-    setWarning(null);
     try {
       const list = await agentApi.listCases(10);
       setCases(list);
@@ -48,11 +47,10 @@ export default function AgentTestPage() {
 
       const ready = await agentApi.checkReady();
       setAgentReady(ready);
-      if (!ready) {
-        setWarning("Agent 执行接口未就绪，Case 列表已加载。请关闭旧的后端窗口后重新运行 start.bat，再点击「开始执行」。");
-      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 Case 列表失败");
+      if (!isApiOfflineError(err)) {
+        setError(err instanceof Error ? err.message : "加载失败");
+      }
     } finally {
       setLoadingCases(false);
     }
@@ -163,7 +161,6 @@ export default function AgentTestPage() {
         </div>
       </header>
 
-      {warning && <div className="agent-test-warning">{warning}</div>}
       {error && <div className="agent-test-error">{error}</div>}
 
       <div className="agent-test-grid">

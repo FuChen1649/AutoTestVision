@@ -1,3 +1,4 @@
+import { readApiResponse } from "./http";
 import type { AppInfo, AppPermissionInfo, CaseData, DeviceInfo, PermissionApplyResult } from "../types";
 
 const API_BASE = "/api";
@@ -7,27 +8,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   });
-
-  if (!response.ok) {
-    const detail = await response.text();
-    try {
-      const payload = JSON.parse(detail) as { detail?: string };
-      if (payload.detail) {
-        throw new Error(payload.detail);
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message !== detail) {
-        throw error;
-      }
-    }
-    throw new Error(detail || `请求失败: ${response.status}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json() as Promise<T>;
+  return readApiResponse<T>(response);
 }
 
 export const api = {

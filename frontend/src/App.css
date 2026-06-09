@@ -280,6 +280,24 @@
   white-space: nowrap;
 }
 
+.device-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.device-toolbar-row .device-toolbar {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-refresh-btn {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
 .primary-btn {
   border: none;
   border-radius: 8px;
