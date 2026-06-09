@@ -35,7 +35,41 @@ AutoTestVision/
 
 ## 快速启动
 
-### 一键启动（推荐）
+### Docker 一键编排（推荐）
+
+```bash
+# 1. 宿主机先把 adb server 暴露到 0.0.0.0:5037（容器内 adb 客户端会远程指挥它）
+adb kill-server
+adb -a -P 5037 nodaemon server start &
+
+# 2. （可选）在仓库根目录建一个 .env，写入大模型 Key（compose 会自动读取）
+#    AGENT_LLM_API_KEY=sk-xxx
+#    AGENT_LLM_BASE_URL=https://api.openai.com/v1
+#    AGENT_LLM_MODEL=gpt-4o-mini
+
+# 3. 编排启动 postgres + backend + frontend
+docker compose up -d --build
+
+# 4. 查看状态 / 日志
+docker compose ps
+docker compose logs -f backend
+```
+
+访问：
+- 前端：http://localhost:5179
+- 后端：http://localhost:8099/api/health
+- 数据库：localhost:5432（autotest / autotest）
+
+停止：
+
+```bash
+docker compose down        # 停掉容器，保留数据
+docker compose down -v     # 连数据卷一起删
+```
+
+> ADB 说明：容器里装的是 Debian 自带 adb，会通过 `ADB_SERVER_SOCKET=tcp:host.docker.internal:5037` 连宿主上的 adb server。所以 USB 设备插在 **宿主**、`adb devices` 在 **宿主** 能看到，容器才认得到。Linux 用户务必让宿主 adb 绑定到 `host-gateway` 能访问的地址（compose 已配 `extra_hosts`）。
+
+### 本地一键启动（Windows）
 
 确保 PostgreSQL 已运行、首次依赖已安装后，双击根目录：
 

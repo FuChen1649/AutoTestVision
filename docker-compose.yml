@@ -11,6 +11,53 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autotest -d autotestvision"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    image: autotestvision-backend:latest
+    container_name: autotestvision-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://autotest:autotest@postgres:5432/autotestvision
+      CORS_ORIGINS: http://localhost:5179,http://127.0.0.1:5179
+      ADB_PATH: adb
+      # 容器内 adb 客户端 -> 宿主机 adb server（宿主需先 `adb -a -P 5037 nodaemon server start`）
+      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
+      AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-}
+      AGENT_LLM_BASE_URL: ${AGENT_LLM_BASE_URL:-}
+      AGENT_LLM_MODEL: ${AGENT_LLM_MODEL:-gpt-4o-mini}
+      AGENT_VERIFY_MODEL: ${AGENT_VERIFY_MODEL:-}
+    ports:
+      - "8099:8099"
+    extra_hosts:
+      # macOS / Windows 上 Docker Desktop 自带；Linux 必须这一行才能解析 host.docker.internal
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8099/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+    image: autotestvision-frontend:latest
+    container_name: autotestvision-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5179:80"
 
 volumes:
   postgres_data:
