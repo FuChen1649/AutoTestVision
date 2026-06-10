@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 import ImageLightbox from "./ImageLightbox";
-import type { StepAttemptRecord } from "../types/agent";
+import AgentExecutionReplay from "./AgentExecutionReplay";
+import type { AgentStepRecord, StepAttemptRecord } from "../types/agent";
+import { buildReplayFrames } from "../utils/buildReplayFrames";
 
 interface AgentExecutionGalleryProps {
   attempts: StepAttemptRecord[];
+  steps?: AgentStepRecord[];
 }
 
 interface LightboxState {
@@ -23,8 +26,9 @@ function statusLabel(status: string) {
   return status;
 }
 
-export default function AgentExecutionGallery({ attempts }: AgentExecutionGalleryProps) {
+export default function AgentExecutionGallery({ attempts, steps = [] }: AgentExecutionGalleryProps) {
   const [lightbox, setLightbox] = useState<LightboxState | null>(null);
+  const [replayOpen, setReplayOpen] = useState(false);
 
   const sortedAttempts = useMemo(
     () =>
@@ -37,12 +41,35 @@ export default function AgentExecutionGallery({ attempts }: AgentExecutionGaller
     [attempts]
   );
 
+  const replayFrames = useMemo(
+    () => buildReplayFrames(sortedAttempts, steps),
+    [sortedAttempts, steps]
+  );
+
   if (sortedAttempts.length === 0) {
     return <div className="agent-panel-empty">执行后将显示截图</div>;
   }
 
   return (
     <>
+      <div className="agent-gallery-toolbar">
+        <button
+          type="button"
+          className="agent-gallery-replay-btn"
+          disabled={replayFrames.length === 0}
+          title={
+            replayFrames.length === 0
+              ? "暂无成功步骤的执行前截图，无法回放"
+              : `按成功步骤顺序回放 ${replayFrames.length} 张标注截图`
+          }
+          onClick={() => setReplayOpen(true)}
+        >
+          回放
+        </button>
+        {replayFrames.length > 0 && (
+          <span className="agent-gallery-replay-hint">{replayFrames.length} 步可回放</span>
+        )}
+      </div>
       <div className="agent-execution-gallery">
         {sortedAttempts.map((attempt) => {
           const label = attemptLabel(attempt);
@@ -115,6 +142,9 @@ export default function AgentExecutionGallery({ attempts }: AgentExecutionGaller
           title={lightbox.title}
           onClose={() => setLightbox(null)}
         />
+      )}
+      {replayOpen && replayFrames.length > 0 && (
+        <AgentExecutionReplay frames={replayFrames} onClose={() => setReplayOpen(false)} />
       )}
     </>
   );
