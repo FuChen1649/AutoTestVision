@@ -25,5 +25,17 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
+    @property
+    def cors_origin_regex(self) -> str:
+        """开发环境：允许通过局域网 IP 访问前端时的跨域来源。"""
+        return (
+            r"https?://("
+            r"localhost|127\.0\.0\.1"
+            r"|192\.168\.\d{1,3}\.\d{1,3}"
+            r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+            r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+            r")(:\d+)?"
+        )
+
 
 settings = Settings()

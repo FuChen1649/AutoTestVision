@@ -26,7 +26,7 @@ if (-not (Test-Path $NodeModules)) {
     Write-Host ""
 }
 
-Write-Host "[1/2] 启动后端  http://localhost:8099"
+Write-Host "[1/2] 启动后端  0.0.0.0:8099 （本机 http://localhost:8099）"
 Get-NetTCPConnection -LocalPort 8099 -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 $backendCmd = 'cd /d "' + $Root + '\backend" & .venv\Scripts\python.exe run.py'
@@ -34,7 +34,7 @@ Start-Process cmd.exe -ArgumentList '/k', $backendCmd -WindowStyle Normal
 
 Start-Sleep -Seconds 2
 
-Write-Host "[2/2] 启动前端  http://localhost:5179"
+Write-Host "[2/2] 启动前端  0.0.0.0:5179 （本机 http://localhost:5179，局域网见前端窗口 Network 地址）"
 Get-NetTCPConnection -LocalPort 5179 -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 $frontendCmd = 'cd /d "' + $Root + '\frontend" & npm run dev'

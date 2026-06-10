@@ -31,13 +31,13 @@ if not exist "frontend\node_modules" (
     echo.
 )
 
-echo [1/2] 启动后端  http://localhost:8099
+echo [1/2] 启动后端  0.0.0.0:8099 （本机 http://localhost:8099）
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8099" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
 start "AutoTestVision-Backend" cmd /k "cd /d "%~dp0backend" && .venv\Scripts\python.exe run.py"
 
 timeout /t 2 /nobreak >nul
 
-echo [2/2] 启动前端  http://localhost:5179
+echo [2/2] 启动前端  0.0.0.0:5179 （本机 http://localhost:5179，局域网见前端窗口 Network 地址）
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5179" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
 start "AutoTestVision-Frontend" cmd /k "cd /d "%~dp0frontend" && npm run dev"
 
