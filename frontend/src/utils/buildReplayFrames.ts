@@ -41,7 +41,7 @@ export function buildReplayFrames(
       label: `step${stepOrder + 1}`,
       description: step?.description ?? `步骤 ${stepOrder + 1}`,
       imageSrc,
-      intent: step?.intent ?? null,
+      intent: successAttempt.intent ?? step?.intent ?? null,
     });
   }
 

@@ -33,6 +33,9 @@ class StepAttemptRecord(BaseModel):
     after_image: str | None = None
     status: str = "running"
     error: str | None = None
+    step_type: str | None = None
+    intent: ActionIntent | None = None
+    metadata: dict | None = None
 
 
 class StepExecutionRecord(BaseModel):
@@ -139,3 +142,12 @@ class StreamEvent(BaseModel):
     run: RunStateResponse | None = None
     logs: list[AgentLogItem] = Field(default_factory=list)
     message: str | None = None
+
+
+class DeviceReplayStreamEvent(BaseModel):
+    type: Literal["start", "recover", "step", "wait", "done", "error"]
+    message: str | None = None
+    step_order: int | None = None
+    step_index: int | None = None
+    total_steps: int | None = None
+    action: str | None = None

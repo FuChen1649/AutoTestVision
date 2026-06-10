@@ -380,6 +380,12 @@
   margin-bottom: 8px;
 }
 
+.agent-gallery-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .agent-gallery-replay-btn {
   border: 1px solid #2563eb;
   border-radius: 8px;
@@ -396,6 +402,29 @@
 }
 
 .agent-gallery-replay-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: #374151;
+  background: #111827;
+  color: #6b7280;
+}
+
+.agent-gallery-device-replay-btn {
+  border: 1px solid #d97706;
+  border-radius: 8px;
+  padding: 6px 14px;
+  background: rgba(217, 119, 6, 0.16);
+  color: #fcd34d;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.agent-gallery-device-replay-btn:hover:not(:disabled) {
+  background: rgba(217, 119, 6, 0.28);
+  color: #fff;
+}
+
+.agent-gallery-device-replay-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   border-color: #374151;
@@ -438,6 +467,14 @@
 .agent-attempt-header strong {
   color: #f3f4f6;
   font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.agent-attempt-action-hint {
+  margin: 0;
+  padding: 6px 10px 0;
+  color: #93c5fd;
+  font-size: 0.72rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 

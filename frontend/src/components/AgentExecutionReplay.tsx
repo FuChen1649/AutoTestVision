@@ -155,11 +155,11 @@ export default function AgentExecutionReplay({ frames, onClose }: AgentExecution
   const hotspot = layout && currentFrame ? intentHotspot(currentFrame.intent, layout) : null;
 
   return (
-    <div className="agent-replay-overlay" role="dialog" aria-modal="true" aria-label="用例回放">
+    <div className="agent-replay-overlay" role="dialog" aria-modal="true" aria-label="用例虚拟回放">
       <div className="agent-replay-dialog">
         <header className="agent-replay-header">
           <div className="agent-replay-header-main">
-            <strong>回放</strong>
+            <strong>虚拟回放</strong>
             <span>
               {finished
                 ? "已完成全部步骤"
@@ -199,8 +199,8 @@ export default function AgentExecutionReplay({ frames, onClose }: AgentExecution
                 height: hotspot.height,
               }}
               onClick={advance}
-              title={`${hotspot.label} · ${isLastFrame ? "完成回放" : "下一步"}`}
-              aria-label={`${hotspot.label}，${isLastFrame ? "完成回放" : "进入下一步"}`}
+              title={`${hotspot.label} · ${isLastFrame ? "完成虚拟回放" : "下一步"}`}
+              aria-label={`${hotspot.label}，${isLastFrame ? "完成虚拟回放" : "进入下一步"}`}
             >
               <span className="agent-replay-hotspot-pulse" />
             </button>
@@ -208,13 +208,13 @@ export default function AgentExecutionReplay({ frames, onClose }: AgentExecution
 
           {!hotspot && !finished && (
             <button type="button" className="agent-replay-continue" onClick={advance}>
-              {isLastFrame ? "完成回放" : "下一步"}
+              {isLastFrame ? "完成虚拟回放" : "下一步"}
             </button>
           )}
 
           {finished && (
             <div className="agent-replay-complete">
-              <p>用例操作过程已回放完成</p>
+              <p>用例操作过程已虚拟回放完成</p>
               <button type="button" className="agent-replay-complete-btn" onClick={onClose}>
                 关闭
               </button>
@@ -224,7 +224,7 @@ export default function AgentExecutionReplay({ frames, onClose }: AgentExecution
 
         <footer className="agent-replay-footer">
           {finished ? (
-            <span>点击关闭按钮退出回放</span>
+            <span>点击关闭按钮退出虚拟回放</span>
           ) : hotspot ? (
             <span>点击屏幕上的标注区域，进入下一步操作</span>
           ) : (

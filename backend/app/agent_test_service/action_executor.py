@@ -1,6 +1,8 @@
+import asyncio
 import base64
 
 from app.agent_test_service.agent_logger import get_agent_logger
+from app.agent_test_service.coordinate_mapper import image_pixels_to_device
 from app.agent_test_service.schemas import ActionIntent
 from app.services.adb import adb_service
 
@@ -16,32 +18,18 @@ class ActionExecutor:
         encoded = base64.b64encode(image_bytes).decode("ascii")
         return f"data:image/png;base64,{encoded}", width, height
 
+    async def get_device_screen_size(self, serial: str | None) -> tuple[int, int]:
+        return await asyncio.to_thread(adb_service.get_screen_size, serial)
+
     def map_coordinates(
         self,
         intent: ActionIntent,
-        model_width: int,
-        model_height: int,
+        image_width: int,
+        image_height: int,
         device_width: int,
         device_height: int,
     ) -> ActionIntent:
-        if intent.action == "skip":
-            return intent
-        if model_width <= 0 or model_height <= 0:
-            return intent
-
-        scale_x = device_width / model_width
-        scale_y = device_height / model_height
-
-        mapped = intent.model_copy(deep=True)
-        if mapped.x is not None:
-            mapped.x = round(mapped.x * scale_x)
-        if mapped.y is not None:
-            mapped.y = round(mapped.y * scale_y)
-        if mapped.x2 is not None:
-            mapped.x2 = round(mapped.x2 * scale_x)
-        if mapped.y2 is not None:
-            mapped.y2 = round(mapped.y2 * scale_y)
-        return mapped
+        return image_pixels_to_device(intent, image_width, image_height, device_width, device_height)
 
     async def execute(self, intent: ActionIntent, serial: str | None) -> ActionIntent:
         if intent.action == "skip":

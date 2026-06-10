@@ -130,6 +130,13 @@ class AdbService:
             logger.warning("获取屏幕尺寸失败 serial=%s: %s", serial, exc)
         return 1080, 1920
 
+    def get_screen_size(self, serial: str | None = None) -> tuple[int, int]:
+        """设备触控/显示逻辑尺寸（wm size）。"""
+        target = serial or self._active_serial
+        if not target:
+            raise RuntimeError("未连接设备")
+        return self._get_screen_size(target)
+
     def set_active_device(self, serial: str) -> None:
         self._active_serial = serial
 
@@ -157,6 +164,29 @@ class AdbService:
         "com.miui.home:id/clearAnimView",
     )
 
+    _LAUNCHER_HOME_COMPONENTS = (
+        "com.sec.android.app.launcher/.activities.LauncherActivity",
+        "com.google.android.apps.nexuslauncher/.NexusLauncherActivity",
+        "com.miui.home/.launcher.Launcher",
+    )
+
+    def press_home_key(
+        self, serial: str | None = None, *, times: int = 1, interval_sec: float = 0.35
+    ) -> int:
+        """发送 Android HOME 键（KEYCODE_HOME=3）。"""
+        if times < 1:
+            return 0
+        target = self._resolve_serial(serial)
+        sent = 0
+        for index in range(times):
+            result = self._run("shell", "input", "keyevent", "3", serial=target, timeout=5)
+            if result.returncode == 0:
+                sent += 1
+            if index < times - 1:
+                time.sleep(interval_sec)
+        logger.info("[adb] 已发送 HOME 键 serial=%s times=%d", target, sent)
+        return sent
+
     def go_home(self, serial: str | None = None) -> None:
         """通过 Launcher Intent 返回手机主屏幕。"""
         target = self._resolve_serial(serial)
@@ -175,7 +205,32 @@ class AdbService:
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="ignore").strip()
             raise RuntimeError(stderr or "返回主屏幕失败")
+
+        for component in self._LAUNCHER_HOME_COMPONENTS:
+            comp_result = self._run(
+                "shell",
+                "am",
+                "start",
+                "-W",
+                "-n",
+                component,
+                serial=target,
+                timeout=15,
+            )
+            if comp_result.returncode == 0:
+                logger.info("[adb] Launcher 主屏 Activity 已拉起 serial=%s component=%s", target, component)
+                break
+
         logger.info("[adb] 已返回主屏幕 serial=%s", target)
+
+    def _stabilize_home_screen(self, serial: str, *, phase: str) -> None:
+        """多次 HOME + Launcher Intent，尽量回到默认主屏第一页（非抽屉/非多任务）。"""
+        logger.info("[adb] 主屏归位 phase=%s serial=%s", phase, serial)
+        self.press_home_key(serial, times=2)
+        time.sleep(0.25)
+        self.go_home(serial)
+        time.sleep(0.25)
+        self.press_home_key(serial, times=1)
 
     def _extract_standard_recent_task_ids(self, recents_dump: str) -> list[int]:
         """从 dumpsys activity recents 解析 type=standard 的 taskId。"""
@@ -282,6 +337,8 @@ class AdbService:
             timeout=5,
         )
         time.sleep(0.5)
+        # 关闭全部后显式回到主屏，避免停留在多任务或副屏
+        self.press_home_key(serial, times=2)
         return tap_result.returncode == 0
 
     def _clear_recent_tasks(self, serial: str) -> dict[str, object]:
@@ -368,10 +425,27 @@ class AdbService:
         }
 
     def recover_scene(self, serial: str | None = None) -> dict[str, object]:
-        """场景恢复：清空后台应用后回到主屏幕。"""
-        clear_detail = self.clear_background_apps(serial)
-        self.go_home(serial)
-        return {"clear_background": clear_detail, "home": True}
+        """场景恢复：先归位主屏，再清后台，最后再次归位主屏。"""
+        target = self._resolve_serial(serial)
+        logger.info("[adb] 场景恢复开始 serial=%s", target)
+
+        # 1) 先按 HOME，退出应用/抽屉/副屏
+        self.press_home_key(target, times=2)
+        time.sleep(0.3)
+
+        # 2) 再通过 Launcher Intent 拉回主屏 Activity
+        self.go_home(target)
+        time.sleep(0.3)
+        self.press_home_key(target, times=1)
+
+        # 3) 清理后台与最近任务（可能短暂打开多任务 UI）
+        clear_detail = self.clear_background_apps(target)
+
+        # 4) 清理后再次归位，保证 Case 从同一初始主屏开始
+        self._stabilize_home_screen(target, phase="after_clear")
+
+        logger.info("[adb] 场景恢复完成 serial=%s", target)
+        return {"clear_background": clear_detail, "home": True, "home_stabilized": True}
 
     async def capture_screen(self, serial: str | None = None) -> bytes:
         target = serial or self._active_serial

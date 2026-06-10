@@ -381,7 +381,13 @@ export default function AgentTestPage() {
             <span>全程记录 · 点击放大</span>
           </header>
           <div className="agent-panel-body agent-image-body">
-            <AgentExecutionGallery attempts={executionAttempts} steps={run?.steps ?? []} />
+            <AgentExecutionGallery
+              attempts={executionAttempts}
+              steps={run?.steps ?? []}
+              runId={run?.run_id ?? null}
+              runStatus={run?.status ?? ""}
+              agentRunning={running}
+            />
           </div>
         </section>
       </div>

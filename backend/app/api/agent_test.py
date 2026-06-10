@@ -8,6 +8,7 @@ from app.agent_test_service.schemas import (
     AgentLogsResponse,
     AnalyzeIntentRequest,
     CaseListItem,
+    DeviceReplayStreamEvent,
     ProvidersResponse,
     RunStateResponse,
     StartRunRequest,
@@ -95,6 +96,31 @@ async def stream_run(run_id: str, db: AsyncSession = Depends(get_db)) -> Streami
 async def advance_one_step(run_id: str, db: AsyncSession = Depends(get_db)) -> StepAdvanceResponse:
     try:
         return await agent_test_service.advance_step(run_id, db)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/device-replay/stream")
+async def stream_device_replay(
+    run_id: str,
+    step_interval_ms: int = Query(default=3000, ge=0, le=30000),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    logger.info(
+        "[api] GET /agent-test/runs/%s/device-replay/stream interval=%d",
+        run_id,
+        step_interval_ms,
+    )
+    try:
+        return StreamingResponse(
+            agent_test_service.stream_device_replay(run_id, db, step_interval_ms=step_interval_ms),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

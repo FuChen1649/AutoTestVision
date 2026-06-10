@@ -5,6 +5,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.agent_test_service.agent_logger import get_agent_logger
+from app.agent_test_service.coordinate_mapper import (
+    decode_image_size,
+    model_coords_to_image_pixels,
+    uses_normalized_1000_coords,
+)
 from app.agent_test_service.llm_factory import llm_factory
 from app.agent_test_service.log_stream import emit as emit_live
 from app.agent_test_service.schemas import ActionIntent, AnalyzeIntentRequest
@@ -29,7 +34,7 @@ SYSTEM_PROMPT = """你是移动端 UI 自动化测试的多模态意图分析器
 }
 
 规则：
-- 坐标基于当前截图像素，左上角为 (0,0)
+- 坐标使用相对坐标系 0-1000（相对截图宽高），左上角 (0,0)，右下角 (1000,1000)
 - 点击用 tap，拖拽/滑动用 swipe 并提供终点 x2,y2
 - 长按用 long_press
 - 权限类、无需 UI 操作时用 skip
@@ -61,7 +66,7 @@ class IntentAnalyzer:
                 detail={"provider": chosen or "default", "model": model_name},
             )
             try:
-                intent = await self._analyze_with_llm(llm, request)
+                intent = await self._analyze_with_llm(llm, request, provider=chosen)
                 logger.info("[intent_analyzer] LLM 分析完成 provider=%s action=%s", chosen, intent.action)
                 emit_live(
                     "intent",
@@ -93,18 +98,39 @@ class IntentAnalyzer:
         return settings.agent_local_model if not settings.agent_llm_api_key else settings.agent_llm_model
 
     async def _analyze_with_llm(
-        self, llm: ChatOpenAI, request: AnalyzeIntentRequest
+        self, llm: ChatOpenAI, request: AnalyzeIntentRequest, *, provider: str | None = None
     ) -> ActionIntent:
         image_url = request.screen_image
         if not image_url.startswith("data:"):
             image_url = f"data:image/png;base64,{image_url}"
+
+        try:
+            actual_width, actual_height = decode_image_size(image_url)
+        except Exception:
+            actual_width, actual_height = request.screen_width, request.screen_height
+
+        if (actual_width, actual_height) != (request.screen_width, request.screen_height):
+            logger.warning(
+                "[intent_analyzer] 截图尺寸不一致 declared=%dx%d actual=%dx%d",
+                request.screen_width,
+                request.screen_height,
+                actual_width,
+                actual_height,
+            )
+
+        coord_hint = (
+            "坐标请输出 0-1000 相对值（相对截图宽高）"
+            if uses_normalized_1000_coords(provider=provider)
+            else "坐标基于当前截图像素，左上角为 (0,0)"
+        )
 
         content: list[dict] = [
             {
                 "type": "text",
                 "text": (
                     f"步骤描述：{request.step_description}\n"
-                    f"截图尺寸：{request.screen_width}x{request.screen_height}"
+                    f"截图尺寸：{actual_width}x{actual_height}\n"
+                    f"{coord_hint}"
                 ),
             },
             {"type": "image_url", "image_url": {"url": image_url}},
@@ -119,8 +145,12 @@ class IntentAnalyzer:
 
         emit_live(
             "intent",
-            f"已发送截图（{request.screen_width}x{request.screen_height}），等待模型响应...",
-            detail={"has_reference": request.reference_image is not None},
+            f"已发送截图（{actual_width}x{actual_height}），等待模型响应...",
+            detail={
+                "has_reference": request.reference_image is not None,
+                "declared_size": f"{request.screen_width}x{request.screen_height}",
+                "actual_size": f"{actual_width}x{actual_height}",
+            },
         )
         response = await llm.ainvoke(
             [
@@ -137,7 +167,7 @@ class IntentAnalyzer:
             f"收到模型响应（{len(raw_str)} 字符），开始解析 JSON",
             detail={"raw_preview": raw_str[:200]},
         )
-        return self._parse_intent(raw_str, request)
+        return self._parse_intent(raw_str, request, provider=provider)
 
     def _analyze_with_heuristic(
         self, request: AnalyzeIntentRequest, fallback_reason: str | None = None
@@ -193,17 +223,31 @@ class IntentAnalyzer:
             reasoning=fallback_reason or "启发式：默认识别为点击",
         )
 
-    def _parse_intent(self, raw: str, request: AnalyzeIntentRequest) -> ActionIntent:
+    def _parse_intent(
+        self, raw: str, request: AnalyzeIntentRequest, *, provider: str | None = None
+    ) -> ActionIntent:
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
             return self._analyze_with_heuristic(request, fallback_reason="模型输出无法解析")
         try:
             payload = json.loads(match.group())
             intent = ActionIntent.model_validate(payload)
-            if intent.action != "skip" and intent.x is not None and intent.y is not None:
-                intent.x = max(0, min(intent.x, request.screen_width - 1))
-                intent.y = max(0, min(intent.y, request.screen_height - 1))
-            return intent
+            if intent.action == "skip" or intent.x is None or intent.y is None:
+                return intent
+
+            try:
+                image_width, image_height = decode_image_size(request.screen_image)
+            except Exception:
+                image_width, image_height = request.screen_width, request.screen_height
+
+            model_name = self._model_name(provider)
+            return model_coords_to_image_pixels(
+                intent,
+                image_width,
+                image_height,
+                provider=provider,
+                model_name=model_name,
+            )
         except Exception:
             return self._analyze_with_heuristic(request, fallback_reason="模型 JSON 无效")
 

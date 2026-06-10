@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.harness import harness_graph, harness_run_config
+from app.agent_test_service.action_executor import action_executor
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.llm_factory import default_provider, probe_providers
@@ -19,6 +20,7 @@ from app.agent_test_service.schemas import (
     AgentLogsResponse,
     AnalyzeIntentRequest,
     CaseListItem,
+    DeviceReplayStreamEvent,
     ProviderInfo,
     ProvidersResponse,
     RunStateResponse,
@@ -27,7 +29,7 @@ from app.agent_test_service.schemas import (
     StepExecutionRecord,
     StreamEvent,
 )
-from app.agent_test_service.tools import agent_tools, parse_step_metadata
+from app.agent_test_service.tools import agent_tools, is_tool_step, parse_step_metadata
 from app.agent_test_service.state import HarnessAgentState, merge_records, utc_now
 from app.models.agent import AgentRun
 from app.models.case import Case
@@ -314,6 +316,184 @@ class AgentTestService:
         await agent_repository.add_log(db, run, "system", "运行已取消")
         await agent_repository.commit(db)
         return True
+
+    async def stream_device_replay(
+        self,
+        run_uuid: str,
+        db: AsyncSession,
+        step_interval_ms: int = 3000,
+    ) -> AsyncGenerator[str, None]:
+        logger.info(
+            "[service:stream_device_replay] run_id=%s interval_ms=%d",
+            run_uuid,
+            step_interval_ms,
+        )
+        run = await agent_repository.get_run_by_uuid(db, run_uuid)
+        if not run:
+            raise RuntimeError("运行实例不存在")
+        if run.status == "running":
+            raise RuntimeError("运行尚未结束，请稍后再试真机回放")
+
+        serial = run.serial or adb_service.get_active_serial()
+        if not serial:
+            raise RuntimeError("未连接设备")
+
+        state = self._to_harness_state(run)
+        successful_steps = [
+            step for step in state.get("steps", []) if step.status == "success"
+        ]
+        successful_steps.sort(key=lambda item: item.step_order)
+        if not successful_steps:
+            raise RuntimeError("没有执行成功的步骤，无法进行真机回放")
+
+        interval_sec = max(step_interval_ms, 0) / 1000.0
+        total = len(successful_steps)
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="start",
+                message=f"准备真机回放，共 {total} 个成功步骤",
+                total_steps=total,
+            )
+        )
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="recover",
+                message="场景恢复：清空后台应用并返回主屏幕…",
+            )
+        )
+        recovery = await agent_tools.recover_scene(serial=serial)
+        if not recovery.get("success"):
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="error",
+                    message=recovery.get("message") or "场景恢复失败",
+                )
+            )
+            return
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="recover",
+                message=recovery.get("message") or "场景恢复完成",
+            )
+        )
+
+        if interval_sec > 0:
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="wait",
+                    message=f"等待 {step_interval_ms / 1000:.1f} 秒…",
+                )
+            )
+            await asyncio.sleep(interval_sec)
+
+        for index, step in enumerate(successful_steps):
+            action_label = self._describe_replay_action(step)
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="step",
+                    message=f"执行步骤 {step.step_order + 1}：{step.description}",
+                    step_order=step.step_order,
+                    step_index=index,
+                    total_steps=total,
+                    action=action_label,
+                )
+            )
+
+            try:
+                await self._execute_device_replay_step(step, serial=serial)
+            except Exception as exc:
+                logger.exception(
+                    "[service:stream_device_replay] 步骤失败 run_id=%s step=%d",
+                    run_uuid,
+                    step.step_order,
+                )
+                yield self._device_replay_sse(
+                    DeviceReplayStreamEvent(
+                        type="error",
+                        message=f"步骤 {step.step_order + 1} 执行失败：{exc}",
+                        step_order=step.step_order,
+                        step_index=index,
+                        total_steps=total,
+                    )
+                )
+                return
+
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="step",
+                    message=f"步骤 {step.step_order + 1} 已在设备上执行",
+                    step_order=step.step_order,
+                    step_index=index,
+                    total_steps=total,
+                    action=action_label,
+                )
+            )
+
+            if index < total - 1 and interval_sec > 0:
+                yield self._device_replay_sse(
+                    DeviceReplayStreamEvent(
+                        type="wait",
+                        message=f"等待 {step_interval_ms / 1000:.1f} 秒后执行下一步…",
+                        step_order=step.step_order,
+                        step_index=index,
+                        total_steps=total,
+                    )
+                )
+                await asyncio.sleep(interval_sec)
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="done",
+                message=f"真机回放完成，共执行 {total} 个步骤",
+                total_steps=total,
+            )
+        )
+
+    async def _execute_device_replay_step(
+        self, step: StepExecutionRecord, *, serial: str
+    ) -> None:
+        if is_tool_step(step.step_type):
+            metadata = step.metadata or {}
+            tool_result = await agent_tools.apply_app_permissions(metadata, serial=serial)
+            if not tool_result.success:
+                raise RuntimeError(tool_result.message)
+            return
+
+        intent = step.intent
+        if intent is None:
+            raise RuntimeError("步骤缺少可执行 action")
+        if intent.action == "skip":
+            logger.info(
+                "[service:stream_device_replay] 跳过无设备操作步骤 step=%d",
+                step.step_order,
+            )
+            return
+
+        await action_executor.execute(intent, serial=serial)
+
+    def _describe_replay_action(self, step: StepExecutionRecord) -> str:
+        if is_tool_step(step.step_type):
+            package = (step.metadata or {}).get("package")
+            return f"tool:{step.step_type}" + (f"({package})" if package else "")
+
+        intent = step.intent
+        if not intent:
+            return "unknown"
+        if intent.action == "skip":
+            return "skip"
+        if intent.action == "tap":
+            return f"tap({intent.x},{intent.y})"
+        if intent.action == "long_press":
+            return f"long_press({intent.x},{intent.y})"
+        if intent.action == "swipe":
+            return f"swipe({intent.x},{intent.y})→({intent.x2},{intent.y2})"
+        return intent.action
+
+    def _device_replay_sse(self, event: DeviceReplayStreamEvent) -> str:
+        return f"data: {event.model_dump_json()}\n\n"
 
     async def _recover_scene_before_run(self, db: AsyncSession, run: AgentRun) -> None:
         if run.current_step_index > 0 or run.status not in {"pending", "running"}:

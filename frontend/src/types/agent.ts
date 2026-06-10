@@ -37,6 +37,9 @@ export interface StepAttemptRecord {
   after_image?: string | null;
   status: string;
   error?: string | null;
+  step_type?: string | null;
+  intent?: ActionIntent | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AgentStepRecord {
@@ -50,6 +53,7 @@ export interface AgentStepRecord {
   before_image_annotated?: string | null;
   after_image?: string | null;
   error?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AgentRunState {
@@ -98,4 +102,13 @@ export interface StreamEvent {
   run?: AgentRunState | null;
   logs?: AgentLogItem[];
   message?: string | null;
+}
+
+export interface DeviceReplayStreamEvent {
+  type: "start" | "recover" | "step" | "wait" | "done" | "error";
+  message?: string | null;
+  step_order?: number | null;
+  step_index?: number | null;
+  total_steps?: number | null;
+  action?: string | null;
 }

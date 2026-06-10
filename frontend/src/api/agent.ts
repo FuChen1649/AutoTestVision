@@ -4,6 +4,7 @@ import type {
   AgentLogItem,
   AgentRunState,
   CaseListItem,
+  DeviceReplayStreamEvent,
   ProvidersResponse,
   StreamEvent,
 } from "../types/agent";
@@ -102,6 +103,40 @@ export const agentApi = {
     source.onerror = () => {
       source.close();
       handlers.onError?.(new Error("Agent 执行流连接中断，请确认后端已重启"));
+      handlers.onDone?.();
+    };
+
+    return () => source.close();
+  },
+
+  streamDeviceReplay: (
+    runId: string,
+    handlers: {
+      onEvent: (event: DeviceReplayStreamEvent) => void;
+      onError?: (error: Error) => void;
+      onDone?: () => void;
+    },
+    stepIntervalMs = 3000
+  ) => {
+    const query = `?step_interval_ms=${encodeURIComponent(String(stepIntervalMs))}`;
+    const source = new EventSource(`${API_BASE}/runs/${runId}/device-replay/stream${query}`);
+
+    source.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data) as DeviceReplayStreamEvent;
+        handlers.onEvent(event);
+        if (event.type === "done" || event.type === "error") {
+          source.close();
+          handlers.onDone?.();
+        }
+      } catch (error) {
+        handlers.onError?.(error instanceof Error ? error : new Error("真机回放数据解析失败"));
+      }
+    };
+
+    source.onerror = () => {
+      source.close();
+      handlers.onError?.(new Error("真机回放连接中断，请确认设备已连接且后端正常"));
       handlers.onDone?.();
     };
 

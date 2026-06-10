@@ -158,13 +158,30 @@ async def execute_action_node(state: HarnessAgentState) -> HarnessAgentState:
         raise RuntimeError("缺少意图分析结果")
     logger.info("[harness:execute_action] run=%s action=%s", state.get("run_id"), intent.action)
 
-    device_width, device_height = state.get("screen_width", 0), state.get("screen_height", 0)
+    image_width, image_height = state.get("screen_width", 0), state.get("screen_height", 0)
+    device_width, device_height = await action_executor.get_device_screen_size(state.get("serial"))
+    logger.info(
+        "[harness:execute_action] run=%s image=%dx%d device=%dx%d tap_raw=(%s,%s)",
+        state.get("run_id"),
+        image_width,
+        image_height,
+        device_width,
+        device_height,
+        intent.x,
+        intent.y,
+    )
     mapped = action_executor.map_coordinates(
         intent,
-        model_width=device_width,
-        model_height=device_height,
+        image_width=image_width,
+        image_height=image_height,
         device_width=device_width,
         device_height=device_height,
+    )
+    logger.info(
+        "[harness:execute_action] run=%s tap_mapped=(%s,%s)",
+        state.get("run_id"),
+        mapped.x,
+        mapped.y,
     )
     executed = await action_executor.execute(mapped, serial=state.get("serial"))
     step = _current_step(state)

@@ -161,9 +161,22 @@ class AgentRepository:
         await db.flush()
         return attempt
 
+    def _step_action_context(self, step: AgentRunStep) -> tuple[str, ActionIntent | None, dict | None]:
+        intent = None
+        if step.intent_json:
+            intent = ActionIntent.model_validate_json(step.intent_json)
+        metadata = parse_step_metadata(step.metadata_json)
+        return step.step_type, intent, metadata or None
+
     def _attempts_to_records(self, run: AgentRun) -> list[StepAttemptRecord]:
-        records = [
-            StepAttemptRecord(
+        step_by_order = {item.step_order: item for item in run.steps}
+
+        def enrich(item: AgentRunStepAttempt) -> StepAttemptRecord:
+            step = step_by_order.get(item.step_order)
+            step_type, intent, metadata = (None, None, None)
+            if step is not None:
+                step_type, intent, metadata = self._step_action_context(step)
+            return StepAttemptRecord(
                 step_order=item.step_order,
                 attempt_index=item.attempt_index,
                 before_image=item.before_image,
@@ -171,7 +184,13 @@ class AgentRepository:
                 after_image=item.after_image,
                 status=item.status,
                 error=item.error,
+                step_type=step_type,
+                intent=intent if item.status == "success" else None,
+                metadata=metadata if item.status == "success" else None,
             )
+
+        records = [
+            enrich(item)
             for item in sorted(run.attempts, key=lambda row: (row.step_order, row.attempt_index))
         ]
         if records:
@@ -181,6 +200,8 @@ class AgentRepository:
         for step in sorted(run.steps, key=lambda item: item.step_order):
             if not (step.before_image or step.before_image_annotated or step.after_image):
                 continue
+            step_type, intent, metadata = self._step_action_context(step)
+            is_success = step.status == "success"
             fallback.append(
                 StepAttemptRecord(
                     step_order=step.step_order,
@@ -190,6 +211,9 @@ class AgentRepository:
                     after_image=step.after_image,
                     status=step.status if step.status in {"success", "failed"} else "running",
                     error=step.error,
+                    step_type=step_type,
+                    intent=intent if is_success else None,
+                    metadata=metadata if is_success else None,
                 )
             )
         return fallback
