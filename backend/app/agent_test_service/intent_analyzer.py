@@ -41,6 +41,13 @@ class IntentAnalyzer:
     async def analyze(
         self, request: AnalyzeIntentRequest, *, provider: str | None = None
     ) -> ActionIntent:
+        if getattr(request, "step_type", None) == "permission_preset":
+            emit_live("intent", "权限步骤应走工具链，跳过 LLM 分析")
+            return ActionIntent(
+                action="skip",
+                confidence=0.0,
+                reasoning="权限步骤应由 tools.apply_app_permissions 处理",
+            )
         chosen = provider or request.llm_provider
         llm = llm_factory.build(chosen)
         mode = f"llm:{chosen or 'default'}" if llm is not None else "heuristic"
@@ -140,6 +147,7 @@ class IntentAnalyzer:
         height = request.screen_height
 
         if "权限" in request.step_description or request.step_description.strip() == "应用权限修改":
+            emit_live("intent", "识别为权限类步骤，跳过 LLM 分析")
             return ActionIntent(
                 action="skip",
                 confidence=0.9,

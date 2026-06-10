@@ -4,6 +4,7 @@ from langgraph.graph import END, StateGraph
 
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.action_executor import action_executor
+from app.agent_test_service.tools import agent_tools, is_tool_step
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.log_stream import set_context as set_log_context
@@ -12,6 +13,17 @@ from app.agent_test_service.state import HarnessAgentState, utc_now
 from app.agent_test_service.step_verifier import step_verifier
 
 logger = get_agent_logger()
+
+# 自然语言步骤一次尝试约 7 个图节点；需按步骤数与重试次数动态设置 recursion_limit
+_NODES_PER_NATURAL_STEP_ATTEMPT = 7
+
+
+def harness_run_config(state: HarnessAgentState) -> dict[str, int]:
+    total_steps = max(state.get("total_steps", 1), 1)
+    max_retries = max(state.get("max_retries", 1), 0)
+    attempts = max_retries + 1
+    limit = total_steps * _NODES_PER_NATURAL_STEP_ATTEMPT * attempts + 15
+    return {"recursion_limit": max(limit, 50)}
 
 
 def _current_step(state: HarnessAgentState) -> StepExecutionRecord:
@@ -45,6 +57,48 @@ async def load_step_node(state: HarnessAgentState) -> HarnessAgentState:
         "current_reference_width": step.reference_width,
         "current_reference_height": step.reference_height,
         "should_continue": True,
+        "updated_at": utc_now(),
+    }
+
+
+def route_after_load_step(state: HarnessAgentState) -> str:
+    if is_tool_step(state.get("current_step_type", "natural")):
+        return "run_tool"
+    return "capture_before"
+
+
+async def run_tool_node(state: HarnessAgentState) -> HarnessAgentState:
+    step = _current_step(state)
+    set_log_context(state.get("run_id"), step.step_order)
+    serial = state.get("serial")
+    logger.info(
+        "[harness:run_tool] run=%s step_type=%s step_order=%d",
+        state.get("run_id"),
+        step.step_type,
+        step.step_order,
+    )
+
+    before_image, width, height = await action_executor.capture_screen(serial)
+    step.status = "running"
+    step.before_image = before_image
+
+    tool_result = await agent_tools.run_for_step(step, serial=serial)
+    step.intent = tool_result.intent
+    step.verification = tool_result.verification
+    step.status = "success" if tool_result.success else "failed"
+    step.error = None if tool_result.success else tool_result.message
+
+    after_image, _, _ = await action_executor.capture_screen(serial)
+    step.after_image = after_image
+
+    return {
+        "before_image": before_image,
+        "after_image": after_image,
+        "screen_width": width,
+        "screen_height": height,
+        "intent": step.intent,
+        "verification": step.verification,
+        "steps": _update_step(state, step),
         "updated_at": utc_now(),
     }
 
@@ -229,6 +283,7 @@ def build_harness_graph():
     graph = StateGraph(HarnessAgentState)
 
     graph.add_node("load_step", load_step_node)
+    graph.add_node("run_tool", run_tool_node)
     graph.add_node("capture_before", capture_before_node)
     graph.add_node("analyze_intent", analyze_intent_node)
     graph.add_node("execute_action", execute_action_node)
@@ -238,7 +293,15 @@ def build_harness_graph():
     graph.add_node("finalize", finalize_node)
 
     graph.set_entry_point("load_step")
-    graph.add_edge("load_step", "capture_before")
+    graph.add_conditional_edges(
+        "load_step",
+        route_after_load_step,
+        {
+            "run_tool": "run_tool",
+            "capture_before": "capture_before",
+        },
+    )
+    graph.add_edge("run_tool", "advance_state")
     graph.add_edge("capture_before", "analyze_intent")
     graph.add_edge("analyze_intent", "execute_action")
     graph.add_edge("execute_action", "capture_after")

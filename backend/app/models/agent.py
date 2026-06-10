@@ -60,6 +60,7 @@ class AgentRunStep(Base):
     intent_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     verification_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     run: Mapped["AgentRun"] = relationship("AgentRun", back_populates="steps")
 

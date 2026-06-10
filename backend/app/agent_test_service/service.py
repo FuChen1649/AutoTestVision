@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agent_test_service.agent_logger import get_agent_logger
-from app.agent_test_service.harness import harness_graph
+from app.agent_test_service.harness import harness_graph, harness_run_config
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.llm_factory import default_provider, probe_providers
@@ -27,6 +27,7 @@ from app.agent_test_service.schemas import (
     StepExecutionRecord,
     StreamEvent,
 )
+from app.agent_test_service.tools import agent_tools, parse_step_metadata
 from app.agent_test_service.state import HarnessAgentState, merge_records, utc_now
 from app.models.agent import AgentRun
 from app.models.case import Case
@@ -157,9 +158,10 @@ class AgentTestService:
         state = self._to_harness_state(run)
         state["status"] = "running"
         await agent_repository.update_run_fields(db, run, status="running")
+        await self._recover_scene_before_run(db, run)
         await agent_repository.commit(db)
 
-        result = await harness_graph.ainvoke(state)
+        result = await harness_graph.ainvoke(state, config=harness_run_config(state))
         await self._sync_state_to_db(db, run_uuid, result)
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         assert run is not None
@@ -178,12 +180,12 @@ class AgentTestService:
 
         state = self._to_harness_state(run)
         await agent_repository.update_run_fields(db, run, status="running")
+        log_stream.set_context(run_uuid, None)
+        await self._recover_scene_before_run(db, run)
         await agent_repository.add_log(db, run, "system", "开始执行 Agent Harness 流程")
         await agent_repository.commit(db)
 
-        # 准备日志桥接：subscribe 实时日志队列；contextvar 由 harness 节点设置
         live_queue = log_stream.subscribe(run_uuid)
-        log_stream.set_context(run_uuid, None)
 
         yield self._sse(StreamEvent(type="start", run=agent_repository.to_response(run)))
 
@@ -193,7 +195,15 @@ class AgentTestService:
 
         async def feed_harness() -> None:
             try:
-                async for event in harness_graph.astream(state, stream_mode="updates"):
+                config = harness_run_config(state)
+                logger.info(
+                    "[service:stream_run] recursion_limit=%d run_id=%s steps=%d retries=%d",
+                    config["recursion_limit"],
+                    run_uuid,
+                    state.get("total_steps", 0),
+                    state.get("max_retries", 0),
+                )
+                async for event in harness_graph.astream(state, stream_mode="updates", config=config):
                     await out_queue.put(("harness", event))
             except Exception as exc:
                 logger.exception("[service:stream_run] harness 异常 run_id=%s", run_uuid)
@@ -219,7 +229,27 @@ class AgentTestService:
                 if kind == "__end__":
                     break
                 if kind == "error":
-                    raise payload  # type: ignore[misc]
+                    exc = payload  # type: ignore[assignment]
+                    error_msg = str(exc)
+                    run = await agent_repository.get_run_by_uuid(db, run_uuid)
+                    if run and run.status == "running":
+                        await agent_repository.update_run_fields(
+                            db, run, status="failed", error=error_msg
+                        )
+                        await agent_repository.add_log(
+                            db, run, "system", f"执行异常：{error_msg}"
+                        )
+                        await agent_repository.commit(db)
+                    run = await agent_repository.get_run_by_uuid(db, run_uuid)
+                    yield self._sse(
+                        StreamEvent(
+                            type="error",
+                            run=agent_repository.to_response(run) if run else None,
+                            message=error_msg,
+                        )
+                    )
+                    should_stop = True
+                    break
                 if kind == "live":
                     # 实时日志：单独包一个事件发出去，前端走同一条 logs 通道
                     yield self._sse(StreamEvent(type="log", logs=[payload]))  # type: ignore[list-item]
@@ -285,6 +315,20 @@ class AgentTestService:
         await agent_repository.commit(db)
         return True
 
+    async def _recover_scene_before_run(self, db: AsyncSession, run: AgentRun) -> None:
+        if run.current_step_index > 0 or run.status not in {"pending", "running"}:
+            return
+        recovery = await agent_tools.recover_scene(serial=run.serial)
+        await agent_repository.add_log(
+            db,
+            run,
+            "system",
+            recovery["message"],
+            detail=recovery.get("detail"),
+        )
+        if not recovery.get("success"):
+            logger.warning("[service] 场景恢复未完全成功 run_id=%s", run.run_uuid)
+
     def _merge_state(self, state: HarnessAgentState, update: HarnessAgentState) -> HarnessAgentState:
         merged = {**state, **update}
         if "steps" in update and update["steps"]:
@@ -347,6 +391,48 @@ class AgentTestService:
                     f"加载步骤 {step_index + 1}：{step_record.description}",
                     step_order=step_record.step_order,
                 )
+
+        elif node_name == "run_tool" and step_record:
+            await agent_repository.create_attempt(
+                db, run, step_record.step_order, step_record.before_image
+            )
+            await agent_repository.add_log(
+                db,
+                run,
+                "executor",
+                step_record.intent.reasoning if step_record.intent else "工具步骤执行完成",
+                step_order=step_record.step_order,
+                detail=step_record.intent.model_dump() if step_record.intent else None,
+            )
+            if step_record.verification:
+                await agent_repository.add_log(
+                    db,
+                    run,
+                    "verifier",
+                    "验证完成：" + ("成功" if step_record.verification.success else "失败"),
+                    step_order=step_record.step_order,
+                    detail=step_record.verification.model_dump(),
+                )
+            await agent_repository.update_step(
+                db,
+                run,
+                step_record.step_order,
+                status=step_record.status,
+                before_image=step_record.before_image,
+                after_image=step_record.after_image,
+                intent=step_record.intent,
+                verification=step_record.verification,
+                error=step_record.error,
+            )
+            await agent_repository.update_latest_attempt(
+                db,
+                run,
+                step_record.step_order,
+                before_image=step_record.before_image,
+                after_image=step_record.after_image,
+                status=step_record.status,
+                error=step_record.error,
+            )
 
         elif node_name == "capture_before" and step_record:
             await agent_repository.create_attempt(
@@ -504,6 +590,7 @@ class AgentTestService:
                     reference_width=step.reference_width,
                     reference_height=step.reference_height,
                     error=step.error,
+                    metadata=parse_step_metadata(step.metadata_json),
                 )
             )
 

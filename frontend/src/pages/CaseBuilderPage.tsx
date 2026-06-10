@@ -17,11 +17,17 @@ function createEmptyStep(order: number): CaseStep {
   return { step_order: order, step_type: "natural", description: "" };
 }
 
-function createPermissionPresetStep(order: number): CaseStep {
+function createPermissionPresetStep(
+  order: number,
+  metadata?: { package: string; permissions: string[] }
+): CaseStep {
   return {
     step_order: order,
     step_type: PERMISSION_PRESET_STEP_TYPE,
     description: PERMISSION_PRESET_LABEL,
+    metadata_json: metadata
+      ? { tool: "apply_app_permissions", ...metadata }
+      : undefined,
   };
 }
 
@@ -157,14 +163,14 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
     onStatusMessage(`步骤 ${index + 1} 已绑定屏幕截图`);
   };
 
-  const handleAddPermissionPresetStep = () => {
+  const handleAddPermissionPresetStep = (payload: { package: string; permissions: string[] }) => {
     setSteps((prev) =>
-      [createPermissionPresetStep(0), ...prev].map((step, index) => ({
+      [createPermissionPresetStep(0, payload), ...prev].map((step, index) => ({
         ...step,
         step_order: index,
       }))
     );
-    onStatusMessage("已记录应用权限修改前置步骤");
+    onStatusMessage("已记录应用权限修改前置步骤（含包名与权限配置）");
   };
 
   const handleSave = async () => {
@@ -178,6 +184,7 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
         step_order: index,
         step_type: step.step_type ?? "natural",
         description: step.description,
+        metadata_json: step.metadata_json ?? null,
         screen_image: step.screen_image ?? null,
         screen_width: step.screen_width ?? null,
         screen_height: step.screen_height ?? null,

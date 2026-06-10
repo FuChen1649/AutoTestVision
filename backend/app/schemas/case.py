@@ -1,6 +1,7 @@
 from datetime import datetime
+import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CaseStepCreate(BaseModel):
@@ -14,6 +15,7 @@ class CaseStepCreate(BaseModel):
     selection_y: int | None = None
     selection_width: int | None = None
     selection_height: int | None = None
+    metadata_json: dict | None = None
 
 
 class CaseStepResponse(BaseModel):
@@ -31,6 +33,18 @@ class CaseStepResponse(BaseModel):
     selection_y: int | None = None
     selection_width: int | None = None
     selection_height: int | None = None
+    metadata_json: dict | None = None
+
+    @field_validator("metadata_json", mode="before")
+    @classmethod
+    def parse_metadata(cls, value: object) -> dict | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            return json.loads(value)
+        return None
 
 
 class CaseCreate(BaseModel):

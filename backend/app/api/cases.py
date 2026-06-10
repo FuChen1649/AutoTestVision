@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +13,9 @@ router = APIRouter(prefix="/cases", tags=["cases"])
 
 
 def _build_step(step, index: int) -> CaseStep:
+    metadata_json = None
+    if step.metadata_json:
+        metadata_json = json.dumps(step.metadata_json, ensure_ascii=False)
     return CaseStep(
         description=step.description,
         step_order=step.step_order or index,
@@ -22,6 +27,7 @@ def _build_step(step, index: int) -> CaseStep:
         selection_y=step.selection_y,
         selection_width=step.selection_width,
         selection_height=step.selection_height,
+        metadata_json=metadata_json,
     )
 
 

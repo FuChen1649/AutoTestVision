@@ -37,5 +37,6 @@ class CaseStep(Base):
     selection_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
     selection_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     selection_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     case: Mapped["Case"] = relationship("Case", back_populates="steps")

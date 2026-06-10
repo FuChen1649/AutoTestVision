@@ -1,5 +1,11 @@
 export type CaseStepType = "natural" | "permission_preset";
 
+export interface CaseStepMetadata {
+  tool: "apply_app_permissions";
+  package: string;
+  permissions: string[];
+}
+
 export interface StepScreenBinding {
   screen_image: string;
   screen_width: number;
@@ -16,6 +22,7 @@ export interface CaseStep {
   step_order: number;
   step_type?: CaseStepType;
   description: string;
+  metadata_json?: CaseStepMetadata | null;
   screen_image?: string | null;
   screen_width?: number | null;
   screen_height?: number | null;

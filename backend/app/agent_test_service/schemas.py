@@ -51,6 +51,7 @@ class StepExecutionRecord(BaseModel):
     reference_width: int | None = None
     reference_height: int | None = None
     error: str | None = None
+    metadata: dict | None = None
 
 
 class AnalyzeIntentRequest(BaseModel):

@@ -145,6 +145,9 @@ export default function AgentTestPage() {
 
       stopStreamRef.current = agentApi.streamRun(created.run_id, {
         onEvent: (event) => {
+          if (event.type === "error") {
+            setError(event.message || "执行异常");
+          }
           if (event.run) {
             setRun(event.run);
           }

@@ -136,6 +136,243 @@ class AdbService:
     def get_active_serial(self) -> str | None:
         return self._active_serial
 
+    def _resolve_serial(self, serial: str | None) -> str:
+        target = serial or self._active_serial
+        if not target:
+            raise RuntimeError("未连接设备")
+        return target
+
+    _RECENTS_CLOSE_LABELS = (
+        "close all",
+        "clear all",
+        "全部关闭",
+        "关闭全部",
+        "清除全部",
+        "全部清除",
+        "一键清除",
+    )
+    _RECENTS_CLEAR_ALL_RESOURCE_IDS = (
+        "com.sec.android.app.launcher:id/clear_all",
+        "com.android.systemui:id/clear_all",
+        "com.miui.home:id/clearAnimView",
+    )
+
+    def go_home(self, serial: str | None = None) -> None:
+        """通过 Launcher Intent 返回手机主屏幕。"""
+        target = self._resolve_serial(serial)
+        result = self._run(
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-c",
+            "android.intent.category.HOME",
+            "-a",
+            "android.intent.action.MAIN",
+            serial=target,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(stderr or "返回主屏幕失败")
+        logger.info("[adb] 已返回主屏幕 serial=%s", target)
+
+    def _extract_standard_recent_task_ids(self, recents_dump: str) -> list[int]:
+        """从 dumpsys activity recents 解析 type=standard 的 taskId。"""
+        task_ids: list[int] = []
+        seen: set[int] = set()
+        for line in recents_dump.splitlines():
+            if "type=standard" not in line:
+                continue
+            match = re.search(r"#(\d+)\s+type=standard", line)
+            if not match:
+                continue
+            task_id = int(match.group(1))
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            task_ids.append(task_id)
+        return task_ids
+
+    def _count_standard_recent_tasks(self, serial: str) -> int:
+        result = self._run("shell", "dumpsys", "activity", "recents", serial=serial, timeout=15)
+        return len(self._extract_standard_recent_task_ids(self._decode(result)))
+
+    def _remove_recent_tasks_via_stack(self, serial: str) -> tuple[int, list[str]]:
+        """逐个 am stack remove，从最近任务列表移除卡片。"""
+        result = self._run("shell", "dumpsys", "activity", "recents", serial=serial, timeout=15)
+        task_ids = self._extract_standard_recent_task_ids(self._decode(result))
+        removed = 0
+        errors: list[str] = []
+        for task_id in task_ids:
+            remove_result = self._run("shell", "am", "stack", "remove", str(task_id), serial=serial, timeout=8)
+            if remove_result.returncode == 0:
+                removed += 1
+            else:
+                stderr = remove_result.stderr.decode("utf-8", errors="ignore").strip()
+                if stderr:
+                    errors.append(f"stack remove {task_id}: {stderr}")
+        return removed, errors
+
+    def _remove_recent_tasks_via_service_call(self, serial: str) -> bool:
+        """尝试调用 ActivityTaskManager.removeAllVisibleRecentTasks（部分机型有效）。"""
+        for code in (21, 23, 31):
+            result = self._run(
+                "shell", "service", "call", "activity_task", str(code), serial=serial, timeout=10
+            )
+            if result.returncode == 0:
+                return True
+        return False
+
+    def _parse_ui_tap_point(self, xml: str) -> tuple[int, int] | None:
+        for resource_id in self._RECENTS_CLEAR_ALL_RESOURCE_IDS:
+            pattern = (
+                rf'resource-id="{re.escape(resource_id)}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+            )
+            match = re.search(pattern, xml)
+            if match:
+                x1, y1, x2, y2 = (int(match.group(i)) for i in range(1, 5))
+                return (x1 + x2) // 2, (y1 + y2) // 2
+
+        node_pattern = re.compile(
+            r'<node[^>]*?(?:text="([^"]*)"|content-desc="([^"]*)")[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+        )
+        for match in node_pattern.finditer(xml):
+            label = (match.group(1) or match.group(2) or "").strip().lower()
+            if not label:
+                continue
+            if not any(token in label for token in self._RECENTS_CLOSE_LABELS):
+                continue
+            x1, y1, x2, y2 = (int(match.group(i)) for i in range(3, 7))
+            return (x1 + x2) // 2, (y1 + y2) // 2
+        return None
+
+    def _clear_recents_via_ui(self, serial: str) -> bool:
+        """打开多任务界面并点击「全部关闭」类按钮（三星/部分 OEM）。"""
+        open_result = self._run("shell", "input", "keyevent", "187", serial=serial, timeout=5)
+        if open_result.returncode != 0:
+            return False
+        time.sleep(0.9)
+
+        dump_path = "/sdcard/autotest_recents_dump.xml"
+        dump_result = self._run(
+            "shell", "uiautomator", "dump", dump_path, serial=serial, timeout=15
+        )
+        if dump_result.returncode != 0:
+            return False
+
+        cat_result = self._run("shell", "cat", dump_path, serial=serial, timeout=10)
+        if cat_result.returncode != 0 or not cat_result.stdout:
+            return False
+
+        xml = cat_result.stdout.decode("utf-8", errors="ignore")
+        tap_point = self._parse_ui_tap_point(xml)
+        if not tap_point:
+            logger.warning("[adb] 未在最近任务界面找到「全部关闭」按钮 serial=%s", serial)
+            self._run("shell", "input", "keyevent", "3", serial=serial, timeout=5)
+            return False
+
+        tap_result = self._run(
+            "shell",
+            "input",
+            "tap",
+            str(tap_point[0]),
+            str(tap_point[1]),
+            serial=serial,
+            timeout=5,
+        )
+        time.sleep(0.5)
+        return tap_result.returncode == 0
+
+    def _clear_recent_tasks(self, serial: str) -> dict[str, object]:
+        """从「最近任务」列表移除应用卡片（force-stop 无法做到）。"""
+        before = self._count_standard_recent_tasks(serial)
+        if before == 0:
+            return {"before": 0, "after": 0, "removed_stack": 0, "service_call": False, "ui_clear": False}
+
+        service_ok = self._remove_recent_tasks_via_service_call(serial)
+        time.sleep(0.3)
+        removed_stack, stack_errors = self._remove_recent_tasks_via_stack(serial)
+        after = self._count_standard_recent_tasks(serial)
+
+        ui_clear = False
+        if after > 0:
+            ui_clear = self._clear_recents_via_ui(serial)
+            time.sleep(0.3)
+            after = self._count_standard_recent_tasks(serial)
+
+        logger.info(
+            "[adb] 最近任务清理 serial=%s before=%d after=%d stack_removed=%d service=%s ui=%s",
+            serial,
+            before,
+            after,
+            removed_stack,
+            service_ok,
+            ui_clear,
+        )
+        return {
+            "before": before,
+            "after": after,
+            "removed_stack": removed_stack,
+            "service_call": service_ok,
+            "ui_clear": ui_clear,
+            "errors": stack_errors[:10],
+        }
+
+    def clear_background_apps(self, serial: str | None = None) -> dict[str, object]:
+        """结束后台进程，并从最近任务列表移除应用卡片。"""
+        target = self._resolve_serial(serial)
+        stopped: list[str] = []
+        errors: list[str] = []
+
+        list_result = self._run("shell", "pm", "list", "packages", "-3", serial=target, timeout=30)
+        packages = [
+            line.split(":", 1)[1].strip()
+            for line in self._decode(list_result).splitlines()
+            if line.startswith("package:")
+        ]
+
+        for package in packages:
+            stop_result = self._run("shell", "am", "force-stop", package, serial=target, timeout=8)
+            if stop_result.returncode == 0:
+                stopped.append(package)
+            else:
+                stderr = stop_result.stderr.decode("utf-8", errors="ignore").strip()
+                if stderr:
+                    errors.append(f"{package}: {stderr}")
+
+        kill_result = self._run("shell", "am", "kill-all", serial=target, timeout=15)
+        kill_all_ok = kill_result.returncode == 0
+        if not kill_all_ok:
+            stderr = kill_result.stderr.decode("utf-8", errors="ignore").strip()
+            if stderr:
+                errors.append(f"kill-all: {stderr}")
+
+        recents_detail = self._clear_recent_tasks(target)
+        recents_errors = recents_detail.get("errors", [])
+        if isinstance(recents_errors, list):
+            errors.extend(str(item) for item in recents_errors)
+
+        logger.info(
+            "[adb] 后台清理完成 serial=%s force_stop=%d kill_all=%s recents_after=%s",
+            target,
+            len(stopped),
+            kill_all_ok,
+            recents_detail.get("after"),
+        )
+        return {
+            "force_stopped_count": len(stopped),
+            "kill_all": kill_all_ok,
+            "recents": recents_detail,
+            "errors": errors[:20],
+        }
+
+    def recover_scene(self, serial: str | None = None) -> dict[str, object]:
+        """场景恢复：清空后台应用后回到主屏幕。"""
+        clear_detail = self.clear_background_apps(serial)
+        self.go_home(serial)
+        return {"clear_background": clear_detail, "home": True}
+
     async def capture_screen(self, serial: str | None = None) -> bytes:
         target = serial or self._active_serial
         if not target:

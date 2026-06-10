@@ -7,7 +7,7 @@ interface AppPermissionControlsProps {
   serial: string | null;
   onSelectDevice: (serial: string) => void;
   onMessage: (message: string | null) => void;
-  onPermissionPresetAdded: () => void;
+  onPermissionPresetAdded: (payload: { package: string; permissions: string[] }) => void;
 }
 
 function categoryPrefix(category: string) {
@@ -170,7 +170,10 @@ export default function AppPermissionControls({
         .filter(Boolean)
         .join("，");
 
-      onPermissionPresetAdded();
+      onPermissionPresetAdded({
+        package: selectedPackage,
+        permissions: Array.from(selectedPermissions),
+      });
       onMessage(summary || "权限已重置");
     } catch (err) {
       onMessage(err instanceof Error ? err.message : "权限重置失败");

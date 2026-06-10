@@ -14,6 +14,7 @@ from app.agent_test_service.schemas import (
     StepExecutionRecord,
     VerificationResult,
 )
+from app.agent_test_service.tools import parse_step_metadata
 from app.models.agent import AgentLog, AgentRun, AgentRunStep, AgentRunStepAttempt
 from app.models.case import Case
 
@@ -51,6 +52,7 @@ class AgentRepository:
                     reference_y=step.selection_y,
                     reference_width=step.selection_width,
                     reference_height=step.selection_height,
+                    metadata_json=step.metadata_json,
                 )
             )
         db.add(run)
@@ -218,6 +220,7 @@ class AgentRepository:
                     reference_width=step.reference_width,
                     reference_height=step.reference_height,
                     error=step.error,
+                    metadata=parse_step_metadata(step.metadata_json),
                 )
             )
 
