@@ -63,6 +63,7 @@ class AnalyzeIntentRequest(BaseModel):
     reference_y: int | None = None
     reference_width: int | None = None
     reference_height: int | None = None
+    llm_provider: str | None = None
 
 
 class StartRunRequest(BaseModel):
@@ -70,6 +71,7 @@ class StartRunRequest(BaseModel):
     serial: str | None = None
     auto_run: bool = False
     max_retries: int = Field(default=1, ge=0, le=3)
+    llm_provider: str | None = None
 
 
 class RunStateResponse(BaseModel):
@@ -83,10 +85,24 @@ class RunStateResponse(BaseModel):
     retry_count: int
     max_retries: int
     error: str | None = None
+    llm_provider: str | None = None
     steps: list[StepExecutionRecord] = Field(default_factory=list)
     attempts: list[StepAttemptRecord] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class ProviderInfo(BaseModel):
+    id: str
+    label: str
+    model: str
+    base_url: str
+    available: bool
+
+
+class ProvidersResponse(BaseModel):
+    providers: list[ProviderInfo] = Field(default_factory=list)
+    default: str | None = None
 
 
 class StepAdvanceResponse(BaseModel):

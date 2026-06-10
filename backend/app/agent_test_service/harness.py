@@ -77,10 +77,11 @@ async def analyze_intent_node(state: HarnessAgentState) -> HarnessAgentState:
         reference_width=state.get("current_reference_width"),
         reference_height=state.get("current_reference_height"),
     )
-    intent = await intent_analyzer.analyze(request)
+    intent = await intent_analyzer.analyze(request, provider=state.get("llm_provider"))
     logger.info(
-        "[harness:analyze_intent] run=%s action=%s confidence=%.2f",
+        "[harness:analyze_intent] run=%s provider=%s action=%s confidence=%.2f",
         state.get("run_id"),
+        state.get("llm_provider"),
         intent.action,
         intent.confidence,
     )
@@ -146,6 +147,7 @@ async def verify_step_node(state: HarnessAgentState) -> HarnessAgentState:
         intent=intent,
         before_image=before_image,
         after_image=after_image,
+        provider=state.get("llm_provider"),
     )
     step.verification = verification
     step.status = "success" if verification.success else "failed"

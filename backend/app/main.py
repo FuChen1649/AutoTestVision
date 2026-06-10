@@ -25,6 +25,7 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS selection_y INTEGER",
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS selection_width INTEGER",
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS selection_height INTEGER",
+            "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS llm_provider TEXT",
         ):
             await conn.execute(text(ddl))
     yield

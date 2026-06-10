@@ -9,6 +9,7 @@ from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.harness import harness_graph
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
+from app.agent_test_service.llm_factory import default_provider, probe_providers
 from app.agent_test_service.repository import agent_repository
 from app.agent_test_service.schemas import (
     ActionIntent,
@@ -16,6 +17,8 @@ from app.agent_test_service.schemas import (
     AgentLogsResponse,
     AnalyzeIntentRequest,
     CaseListItem,
+    ProviderInfo,
+    ProvidersResponse,
     RunStateResponse,
     StartRunRequest,
     StepAdvanceResponse,
@@ -55,7 +58,12 @@ class AgentTestService:
         return intent
 
     async def start_run(self, payload: StartRunRequest, db: AsyncSession) -> RunStateResponse:
-        logger.info("[service:start_run] case_id=%d serial=%s", payload.case_id, payload.serial)
+        logger.info(
+            "[service:start_run] case_id=%d serial=%s provider=%s",
+            payload.case_id,
+            payload.serial,
+            payload.llm_provider,
+        )
         case = await self._load_case(payload.case_id, db)
         serial = payload.serial or adb_service.get_active_serial()
         if not serial:
@@ -65,15 +73,55 @@ class AgentTestService:
             serial = devices[0].serial
             adb_service.set_active_device(serial)
 
-        run = await agent_repository.create_run(db, case, serial, payload.max_retries)
+        resolved_provider = payload.llm_provider or default_provider()
+        run = await agent_repository.create_run(
+            db,
+            case,
+            serial,
+            payload.max_retries,
+            llm_provider=resolved_provider,
+        )
         await agent_repository.add_log(
-            db, run, "system", f"已创建 Agent 运行实例，来源 Case #{case.id}", detail={"case_name": case.name}
+            db,
+            run,
+            "system",
+            f"已创建 Agent 运行实例，来源 Case #{case.id}",
+            detail={"case_name": case.name, "llm_provider": resolved_provider},
         )
         await agent_repository.commit(db)
         run = await agent_repository.get_run_by_uuid(db, run.run_uuid)
         assert run is not None
-        logger.info("[service:start_run] run_id=%s steps=%d", run.run_uuid, run.total_steps)
+        logger.info(
+            "[service:start_run] run_id=%s steps=%d provider=%s",
+            run.run_uuid,
+            run.total_steps,
+            run.llm_provider,
+        )
         return agent_repository.to_response(run)
+
+    async def get_providers(self) -> ProvidersResponse:
+        specs = await probe_providers()
+        infos = [
+            ProviderInfo(
+                id=spec.id,
+                label=spec.label,
+                model=spec.model,
+                base_url=spec.base_url,
+                available=spec.available,
+            )
+            for spec in specs
+        ]
+        # 默认 provider：优先 settings 指定且实测可达；否则取第一个可达；都没有则 None
+        configured = default_provider()
+        resolved_default: str | None = None
+        if configured and any(info.available and info.id == configured for info in infos):
+            resolved_default = configured
+        else:
+            for info in infos:
+                if info.available:
+                    resolved_default = info.id
+                    break
+        return ProvidersResponse(providers=infos, default=resolved_default)
 
     async def get_run(self, run_uuid: str, db: AsyncSession) -> RunStateResponse | None:
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
@@ -415,6 +463,7 @@ class AgentTestService:
             "retry_count": run.retry_count,
             "max_retries": run.max_retries,
             "error": run.error,
+            "llm_provider": run.llm_provider,
             "steps": steps,
             "should_continue": run.status not in {"completed", "failed", "cancelled"},
             "created_at": run.created_at,

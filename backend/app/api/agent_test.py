@@ -8,6 +8,7 @@ from app.agent_test_service.schemas import (
     AgentLogsResponse,
     AnalyzeIntentRequest,
     CaseListItem,
+    ProvidersResponse,
     RunStateResponse,
     StartRunRequest,
     StepAdvanceResponse,
@@ -25,6 +26,12 @@ async def list_cases_for_agent(
 ) -> list[CaseListItem]:
     logger.info("[api] GET /agent-test/cases limit=%d", limit)
     return await agent_test_service.list_cases(db, limit=limit)
+
+
+@router.get("/providers", response_model=ProvidersResponse)
+async def list_providers() -> ProvidersResponse:
+    logger.info("[api] GET /agent-test/providers")
+    return await agent_test_service.get_providers()
 
 
 @router.post("/analyze", response_model=ActionIntent)

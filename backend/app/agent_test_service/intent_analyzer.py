@@ -5,8 +5,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.agent_test_service.agent_logger import get_agent_logger
+from app.agent_test_service.llm_factory import llm_factory
 from app.agent_test_service.schemas import ActionIntent, AnalyzeIntentRequest
-from app.config import settings
 
 logger = get_agent_logger()
 
@@ -36,33 +36,30 @@ SYSTEM_PROMPT = """你是移动端 UI 自动化测试的多模态意图分析器
 
 
 class IntentAnalyzer:
-    def __init__(self) -> None:
-        self._llm: ChatOpenAI | None = None
-        if settings.agent_llm_api_key:
-            self._llm = ChatOpenAI(
-                api_key=settings.agent_llm_api_key,
-                base_url=settings.agent_llm_base_url or None,
-                model=settings.agent_llm_model,
-                temperature=0,
-            )
-
-    async def analyze(self, request: AnalyzeIntentRequest) -> ActionIntent:
-        mode = "llm" if self._llm is not None else "heuristic"
+    async def analyze(
+        self, request: AnalyzeIntentRequest, *, provider: str | None = None
+    ) -> ActionIntent:
+        chosen = provider or request.llm_provider
+        llm = llm_factory.build(chosen)
+        mode = f"llm:{chosen or 'default'}" if llm is not None else "heuristic"
         logger.info("[intent_analyzer] 开始分析 mode=%s desc=%s", mode, request.step_description[:80])
-        if self._llm is not None:
+        if llm is not None:
             try:
-                intent = await self._analyze_with_llm(request)
-                logger.info("[intent_analyzer] LLM 分析完成 action=%s", intent.action)
+                intent = await self._analyze_with_llm(llm, request)
+                logger.info("[intent_analyzer] LLM 分析完成 provider=%s action=%s", chosen, intent.action)
                 return intent
             except Exception as exc:
-                logger.warning("[intent_analyzer] LLM 失败，回退启发式: %s", exc)
+                logger.warning(
+                    "[intent_analyzer] LLM(%s) 失败，回退启发式: %s", chosen, exc
+                )
                 return self._analyze_with_heuristic(request, fallback_reason=str(exc))
         intent = self._analyze_with_heuristic(request)
         logger.info("[intent_analyzer] 启发式分析完成 action=%s", intent.action)
         return intent
 
-    async def _analyze_with_llm(self, request: AnalyzeIntentRequest) -> ActionIntent:
-        assert self._llm is not None
+    async def _analyze_with_llm(
+        self, llm: ChatOpenAI, request: AnalyzeIntentRequest
+    ) -> ActionIntent:
         image_url = request.screen_image
         if not image_url.startswith("data:"):
             image_url = f"data:image/png;base64,{image_url}"
@@ -85,7 +82,7 @@ class IntentAnalyzer:
             content.append({"type": "text", "text": "参考区域截图（用户框选）："})
             content.append({"type": "image_url", "image_url": {"url": ref_url}})
 
-        response = await self._llm.ainvoke(
+        response = await llm.ainvoke(
             [
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=content),

@@ -36,6 +36,12 @@ services:
       AGENT_LLM_BASE_URL: ${AGENT_LLM_BASE_URL:-}
       AGENT_LLM_MODEL: ${AGENT_LLM_MODEL:-gpt-4o-mini}
       AGENT_VERIFY_MODEL: ${AGENT_VERIFY_MODEL:-}
+      # 本地 Ollama（OpenAI 兼容端点，宿主机 11434）
+      AGENT_LOCAL_BASE_URL: ${AGENT_LOCAL_BASE_URL:-http://host.docker.internal:11434/v1}
+      AGENT_LOCAL_MODEL: ${AGENT_LOCAL_MODEL:-gemma4:12b}
+      AGENT_LOCAL_API_KEY: ${AGENT_LOCAL_API_KEY:-ollama}
+      # 前端未指定 provider 时的默认值：local | online
+      AGENT_DEFAULT_PROVIDER: ${AGENT_DEFAULT_PROVIDER:-local}
     ports:
       - "8099:8099"
     extra_hosts:

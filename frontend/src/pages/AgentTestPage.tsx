@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentApi } from "../api/agent";
 import { isApiOfflineError } from "../api/http";
 import AgentExecutionGallery from "../components/AgentExecutionGallery";
-import type { AgentLogItem, AgentRunState, CaseListItem } from "../types/agent";
+import type {
+  AgentLogItem,
+  AgentRunState,
+  CaseListItem,
+  ProviderInfo,
+} from "../types/agent";
 import "./AgentTestPage.css";
 
 function formatTime(value: string) {
@@ -21,6 +26,8 @@ export default function AgentTestPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentReady, setAgentReady] = useState(true);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<string>("");
 
   const executionAttempts = useMemo(() => run?.attempts ?? [], [run]);
 
@@ -57,10 +64,33 @@ export default function AgentTestPage() {
     }
   }, []);
 
+  const loadProviders = useCallback(async () => {
+    try {
+      const resp = await agentApi.listProviders();
+      // 只保留实测可达的 provider，未配置 / 连不上的直接不展示
+      const reachable = resp.providers.filter((item) => item.available);
+      setProviders(reachable);
+      setSelectedProvider((current) => {
+        if (current && reachable.some((p) => p.id === current)) {
+          return current;
+        }
+        if (resp.default && reachable.some((p) => p.id === resp.default)) {
+          return resp.default;
+        }
+        return reachable[0]?.id ?? "";
+      });
+    } catch (err) {
+      if (!isApiOfflineError(err)) {
+        console.warn("加载模型列表失败", err);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     void loadCases();
+    void loadProviders();
     return () => stopStreamRef.current?.();
-  }, [loadCases]);
+  }, [loadCases, loadProviders]);
 
   const mergeLogs = (prev: AgentLogItem[], incoming: AgentLogItem[]) => {
     const map = new Map(prev.map((item) => [item.id, item]));
@@ -90,7 +120,7 @@ export default function AgentTestPage() {
     setRunning(true);
 
     try {
-      const created = await agentApi.startRun(selectedCaseId);
+      const created = await agentApi.startRun(selectedCaseId, selectedProvider || null);
       setRun(created);
 
       stopStreamRef.current = agentApi.streamRun(created.run_id, {
@@ -137,10 +167,40 @@ export default function AgentTestPage() {
             <span className="agent-test-run-badge">
               {run.case_name} · {run.status} · 步骤{" "}
               {(activeStepOrder ?? run.current_step_index) + 1}/{run.total_steps}
+              {run.llm_provider ? ` · ${run.llm_provider}` : ""}
             </span>
           )}
         </div>
         <div className="agent-test-toolbar-actions">
+          <label className="agent-test-provider">
+            <span>模型</span>
+            <select
+              value={selectedProvider}
+              onChange={(event) => setSelectedProvider(event.target.value)}
+              disabled={running || providers.length === 0}
+              title={
+                providers.length === 0
+                  ? "未检测到任何可达模型（本地 Ollama / 在线 LLM 均连不上）"
+                  : undefined
+              }
+            >
+              {providers.length === 0 && <option value="">无可用模型</option>}
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="agent-test-provider-refresh"
+              onClick={() => void loadProviders()}
+              disabled={running}
+              title="重新探测模型可达性"
+            >
+              ↻
+            </button>
+          </label>
           <button className="secondary-btn" type="button" onClick={() => void loadCases()} disabled={loadingCases}>
             刷新 Case
           </button>

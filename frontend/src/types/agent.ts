@@ -63,10 +63,24 @@ export interface AgentRunState {
   retry_count: number;
   max_retries: number;
   error?: string | null;
+  llm_provider?: string | null;
   steps: AgentStepRecord[];
   attempts: StepAttemptRecord[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ProviderInfo {
+  id: string;
+  label: string;
+  model: string;
+  base_url: string;
+  available: boolean;
+}
+
+export interface ProvidersResponse {
+  providers: ProviderInfo[];
+  default: string | null;
 }
 
 export interface AgentLogItem {

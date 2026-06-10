@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from PIL import Image, ImageChops
 
 from app.agent_test_service.agent_logger import get_agent_logger
+from app.agent_test_service.llm_factory import llm_factory
 from app.agent_test_service.schemas import ActionIntent, VerificationResult
 from app.config import settings
 
@@ -26,22 +27,14 @@ VERIFY_PROMPT = """你是移动端自动化测试验证器。
 
 
 class StepVerifier:
-    def __init__(self) -> None:
-        self._llm: ChatOpenAI | None = None
-        if settings.agent_llm_api_key:
-            self._llm = ChatOpenAI(
-                api_key=settings.agent_llm_api_key,
-                base_url=settings.agent_llm_base_url or None,
-                model=settings.agent_verify_model or settings.agent_llm_model,
-                temperature=0,
-            )
-
     async def verify(
         self,
         step_description: str,
         intent: ActionIntent,
         before_image: str,
         after_image: str,
+        *,
+        provider: str | None = None,
     ) -> VerificationResult:
         if intent.action == "skip":
             logger.info("[step_verifier] 跳过验证")
@@ -51,15 +44,22 @@ class StepVerifier:
                 reasoning="跳过类步骤自动通过",
             )
 
-        mode = "llm" if self._llm is not None else "diff"
+        # 验证用模型：优先 agent_verify_model；否则跟随 provider 默认 model。
+        verify_model_override = settings.agent_verify_model or None
+        llm = llm_factory.build(provider, model_override=verify_model_override)
+        mode = f"llm:{provider or 'default'}" if llm is not None else "diff"
         logger.info("[step_verifier] 开始验证 mode=%s desc=%s", mode, step_description[:80])
-        if self._llm is not None:
+        if llm is not None:
             try:
-                result = await self._verify_with_llm(step_description, before_image, after_image)
-                logger.info("[step_verifier] LLM 验证 success=%s", result.success)
+                result = await self._verify_with_llm(llm, step_description, before_image, after_image)
+                logger.info(
+                    "[step_verifier] LLM 验证 provider=%s success=%s", provider, result.success
+                )
                 return result
             except Exception as exc:
-                logger.warning("[step_verifier] LLM 失败，回退像素差异: %s", exc)
+                logger.warning(
+                    "[step_verifier] LLM(%s) 失败，回退像素差异: %s", provider, exc
+                )
                 return self._verify_with_diff(before_image, after_image, fallback_reason=str(exc))
 
         result = self._verify_with_diff(before_image, after_image)
@@ -67,14 +67,17 @@ class StepVerifier:
         return result
 
     async def _verify_with_llm(
-        self, step_description: str, before_image: str, after_image: str
+        self,
+        llm: ChatOpenAI,
+        step_description: str,
+        before_image: str,
+        after_image: str,
     ) -> VerificationResult:
-        assert self._llm is not None
 
         def normalize(url: str) -> str:
             return url if url.startswith("data:") else f"data:image/png;base64,{url}"
 
-        response = await self._llm.ainvoke(
+        response = await llm.ainvoke(
             [
                 SystemMessage(content=VERIFY_PROMPT),
                 HumanMessage(

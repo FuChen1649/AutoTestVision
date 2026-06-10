@@ -1,6 +1,12 @@
 import { api } from "./client";
 import { readApiResponse } from "./http";
-import type { AgentLogItem, AgentRunState, CaseListItem, StreamEvent } from "../types/agent";
+import type {
+  AgentLogItem,
+  AgentRunState,
+  CaseListItem,
+  ProvidersResponse,
+  StreamEvent,
+} from "../types/agent";
 
 function toCaseListItem(
   item: Awaited<ReturnType<typeof api.listCases>>[number]
@@ -49,10 +55,16 @@ export const agentApi = {
       .map(toCaseListItem);
   },
 
-  startRun: (caseId: number) =>
+  listProviders: () => request<ProvidersResponse>("/providers"),
+
+  startRun: (caseId: number, llmProvider?: string | null) =>
     request<AgentRunState>("/runs", {
       method: "POST",
-      body: JSON.stringify({ case_id: caseId, auto_run: false }),
+      body: JSON.stringify({
+        case_id: caseId,
+        auto_run: false,
+        ...(llmProvider ? { llm_provider: llmProvider } : {}),
+      }),
     }),
 
   getRun: (runId: string) => request<AgentRunState>(`/runs/${runId}`),
