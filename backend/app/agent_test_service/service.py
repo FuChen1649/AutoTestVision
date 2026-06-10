@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 
@@ -10,6 +11,7 @@ from app.agent_test_service.harness import harness_graph
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.llm_factory import default_provider, probe_providers
+from app.agent_test_service import log_stream
 from app.agent_test_service.repository import agent_repository
 from app.agent_test_service.schemas import (
     ActionIntent,
@@ -179,32 +181,85 @@ class AgentTestService:
         await agent_repository.add_log(db, run, "system", "开始执行 Agent Harness 流程")
         await agent_repository.commit(db)
 
+        # 准备日志桥接：subscribe 实时日志队列；contextvar 由 harness 节点设置
+        live_queue = log_stream.subscribe(run_uuid)
+        log_stream.set_context(run_uuid, None)
+
         yield self._sse(StreamEvent(type="start", run=agent_repository.to_response(run)))
 
-        run = await agent_repository.get_run_by_uuid(db, run_uuid)
-        async for event in harness_graph.astream(state, stream_mode="updates"):
+        # 把 harness 事件塞进同一个 "out" 队列，便于和 live_queue 合流
+        out_queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        SENTINEL = ("__end__", None)
+
+        async def feed_harness() -> None:
+            try:
+                async for event in harness_graph.astream(state, stream_mode="updates"):
+                    await out_queue.put(("harness", event))
+            except Exception as exc:
+                logger.exception("[service:stream_run] harness 异常 run_id=%s", run_uuid)
+                await out_queue.put(("error", exc))
+            finally:
+                await out_queue.put(SENTINEL)
+
+        async def feed_live_logs() -> None:
+            try:
+                while True:
+                    log_item = await live_queue.get()
+                    await out_queue.put(("live", log_item))
+            except asyncio.CancelledError:
+                pass
+
+        harness_task = asyncio.create_task(feed_harness())
+        live_task = asyncio.create_task(feed_live_logs())
+
+        try:
             should_stop = False
-            for node_name, update in event.items():
-                logger.debug("[service:stream_run] node=%s run_id=%s", node_name, run_uuid)
-                state = self._merge_state(state, update)
-                new_logs = await self._persist_node_update(db, run_uuid, node_name, state)
-                run = await agent_repository.get_run_by_uuid(db, run_uuid)
-                if not run:
-                    should_stop = True
+            while not should_stop:
+                kind, payload = await out_queue.get()
+                if kind == "__end__":
                     break
-                yield self._sse(
-                    StreamEvent(
-                        type="node",
-                        node=node_name,
-                        run=agent_repository.to_response(run),
-                        logs=new_logs,
+                if kind == "error":
+                    raise payload  # type: ignore[misc]
+                if kind == "live":
+                    # 实时日志：单独包一个事件发出去，前端走同一条 logs 通道
+                    yield self._sse(StreamEvent(type="log", logs=[payload]))  # type: ignore[list-item]
+                    continue
+
+                # harness 节点更新
+                event = payload  # type: ignore[assignment]
+                for node_name, update in event.items():  # type: ignore[union-attr]
+                    logger.debug("[service:stream_run] node=%s run_id=%s", node_name, run_uuid)
+                    state = self._merge_state(state, update)
+                    new_logs = await self._persist_node_update(db, run_uuid, node_name, state)
+                    run = await agent_repository.get_run_by_uuid(db, run_uuid)
+                    if not run:
+                        should_stop = True
+                        break
+                    yield self._sse(
+                        StreamEvent(
+                            type="node",
+                            node=node_name,
+                            run=agent_repository.to_response(run),
+                            logs=new_logs,
+                        )
                     )
-                )
-                if run.status in {"failed", "cancelled"}:
-                    should_stop = True
-                    break
-            if should_stop:
-                break
+                    if run.status in {"failed", "cancelled"}:
+                        should_stop = True
+                        break
+        finally:
+            live_task.cancel()
+            try:
+                await live_task
+            except asyncio.CancelledError:
+                pass
+            if not harness_task.done():
+                harness_task.cancel()
+                try:
+                    await harness_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            log_stream.release(run_uuid)
+            log_stream.set_context(None, None)
 
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         assert run is not None

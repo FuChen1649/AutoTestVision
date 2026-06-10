@@ -16,6 +16,8 @@ function formatTime(value: string) {
 
 export default function AgentTestPage() {
   const stopStreamRef = useRef<(() => void) | null>(null);
+  const intentScrollRef = useRef<HTMLDivElement | null>(null);
+  const verifierScrollRef = useRef<HTMLDivElement | null>(null);
 
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
@@ -91,6 +93,24 @@ export default function AgentTestPage() {
     void loadProviders();
     return () => stopStreamRef.current?.();
   }, [loadCases, loadProviders]);
+
+  // 终态后清掉所有实时日志（负 ID），只保留持久化结果。
+  useEffect(() => {
+    if (!run) return;
+    if (!["completed", "failed", "cancelled"].includes(run.status)) return;
+    setIntentLogs((prev) => prev.filter((item) => item.id >= 0));
+    setVerifierLogs((prev) => prev.filter((item) => item.id >= 0));
+  }, [run?.status]);
+
+  useEffect(() => {
+    const el = intentScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [intentLogs.length]);
+
+  useEffect(() => {
+    const el = verifierScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [verifierLogs.length]);
 
   const mergeLogs = (prev: AgentLogItem[], incoming: AgentLogItem[]) => {
     const map = new Map(prev.map((item) => [item.id, item]));
@@ -289,44 +309,66 @@ export default function AgentTestPage() {
         <section className="agent-panel agent-panel-logs">
           <header className="agent-panel-header">
             <h3>意图分析 Agent</h3>
-            <span>实时分析日志</span>
+            <span>{running ? "执行中 · 实时跟踪" : "执行结果"}</span>
           </header>
-          <div className="agent-panel-body agent-log-body">
-            {intentLogs.length === 0 && <div className="agent-panel-empty">等待意图分析...</div>}
-            {intentLogs.map((log) => (
-              <article key={log.id} className="agent-log-item">
-                <div className="agent-log-meta">
-                  <span>步骤 {(log.step_order ?? 0) + 1}</span>
-                  <time>{formatTime(log.created_at)}</time>
-                </div>
-                <p>{log.message}</p>
-                {log.detail && (
-                  <pre>{JSON.stringify(log.detail, null, 2)}</pre>
-                )}
-              </article>
-            ))}
+          <div className="agent-panel-body agent-log-body" ref={intentScrollRef}>
+            {intentLogs.length === 0 && (
+              <div className="agent-panel-empty">
+                {running ? "等待意图分析 Agent 开始工作..." : "尚无意图分析记录"}
+              </div>
+            )}
+            {intentLogs.map((log) => {
+              const isLive = log.id < 0;
+              return (
+                <article
+                  key={log.id}
+                  className={isLive ? "agent-log-item agent-log-item-live" : "agent-log-item"}
+                >
+                  <div className="agent-log-meta">
+                    <span>
+                      {isLive && <em className="agent-log-live-dot">●</em>}
+                      步骤 {(log.step_order ?? 0) + 1}
+                    </span>
+                    <time>{formatTime(log.created_at)}</time>
+                  </div>
+                  <p>{log.message}</p>
+                  {log.detail && <pre>{JSON.stringify(log.detail, null, 2)}</pre>}
+                </article>
+              );
+            })}
           </div>
         </section>
 
         <section className="agent-panel agent-panel-logs">
           <header className="agent-panel-header">
             <h3>验证 Agent</h3>
-            <span>实时验证日志</span>
+            <span>{running ? "执行中 · 实时跟踪" : "验证结果"}</span>
           </header>
-          <div className="agent-panel-body agent-log-body">
-            {verifierLogs.length === 0 && <div className="agent-panel-empty">等待步骤验证...</div>}
-            {verifierLogs.map((log) => (
-              <article key={log.id} className="agent-log-item">
-                <div className="agent-log-meta">
-                  <span>步骤 {(log.step_order ?? 0) + 1}</span>
-                  <time>{formatTime(log.created_at)}</time>
-                </div>
-                <p>{log.message}</p>
-                {log.detail && (
-                  <pre>{JSON.stringify(log.detail, null, 2)}</pre>
-                )}
-              </article>
-            ))}
+          <div className="agent-panel-body agent-log-body" ref={verifierScrollRef}>
+            {verifierLogs.length === 0 && (
+              <div className="agent-panel-empty">
+                {running ? "等待步骤验证 Agent 开始工作..." : "尚无验证记录"}
+              </div>
+            )}
+            {verifierLogs.map((log) => {
+              const isLive = log.id < 0;
+              return (
+                <article
+                  key={log.id}
+                  className={isLive ? "agent-log-item agent-log-item-live" : "agent-log-item"}
+                >
+                  <div className="agent-log-meta">
+                    <span>
+                      {isLive && <em className="agent-log-live-dot">●</em>}
+                      步骤 {(log.step_order ?? 0) + 1}
+                    </span>
+                    <time>{formatTime(log.created_at)}</time>
+                  </div>
+                  <p>{log.message}</p>
+                  {log.detail && <pre>{JSON.stringify(log.detail, null, 2)}</pre>}
+                </article>
+              );
+            })}
           </div>
         </section>
 

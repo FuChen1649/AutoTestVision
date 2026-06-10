@@ -6,7 +6,9 @@ from langchain_openai import ChatOpenAI
 
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.llm_factory import llm_factory
+from app.agent_test_service.log_stream import emit as emit_live
 from app.agent_test_service.schemas import ActionIntent, AnalyzeIntentRequest
+from app.config import settings
 
 logger = get_agent_logger()
 
@@ -43,19 +45,45 @@ class IntentAnalyzer:
         llm = llm_factory.build(chosen)
         mode = f"llm:{chosen or 'default'}" if llm is not None else "heuristic"
         logger.info("[intent_analyzer] 开始分析 mode=%s desc=%s", mode, request.step_description[:80])
+
         if llm is not None:
+            model_name = self._model_name(chosen)
+            emit_live(
+                "intent",
+                f"准备调用模型 provider={chosen or 'default'} model={model_name}",
+                detail={"provider": chosen or "default", "model": model_name},
+            )
             try:
                 intent = await self._analyze_with_llm(llm, request)
                 logger.info("[intent_analyzer] LLM 分析完成 provider=%s action=%s", chosen, intent.action)
+                emit_live(
+                    "intent",
+                    f"模型解析成功 action={intent.action}",
+                    detail={"action": intent.action, "confidence": intent.confidence},
+                )
                 return intent
             except Exception as exc:
                 logger.warning(
                     "[intent_analyzer] LLM(%s) 失败，回退启发式: %s", chosen, exc
                 )
+                emit_live(
+                    "intent",
+                    f"LLM 调用失败，回退启发式分析: {exc}",
+                    detail={"error": str(exc)},
+                )
                 return self._analyze_with_heuristic(request, fallback_reason=str(exc))
+        emit_live("intent", "未配置可用 LLM，使用启发式分析")
         intent = self._analyze_with_heuristic(request)
         logger.info("[intent_analyzer] 启发式分析完成 action=%s", intent.action)
         return intent
+
+    def _model_name(self, provider: str | None) -> str:
+        if provider == "local":
+            return settings.agent_local_model
+        if provider == "online":
+            return settings.agent_llm_model
+        # 默认/未指定时，按 default_provider 实际生效的猜测；展示用，差一点不致命
+        return settings.agent_local_model if not settings.agent_llm_api_key else settings.agent_llm_model
 
     async def _analyze_with_llm(
         self, llm: ChatOpenAI, request: AnalyzeIntentRequest
@@ -82,6 +110,11 @@ class IntentAnalyzer:
             content.append({"type": "text", "text": "参考区域截图（用户框选）："})
             content.append({"type": "image_url", "image_url": {"url": ref_url}})
 
+        emit_live(
+            "intent",
+            f"已发送截图（{request.screen_width}x{request.screen_height}），等待模型响应...",
+            detail={"has_reference": request.reference_image is not None},
+        )
         response = await llm.ainvoke(
             [
                 SystemMessage(content=SYSTEM_PROMPT),
@@ -91,7 +124,13 @@ class IntentAnalyzer:
         raw = response.content
         if isinstance(raw, list):
             raw = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in raw)
-        return self._parse_intent(str(raw), request)
+        raw_str = str(raw)
+        emit_live(
+            "intent",
+            f"收到模型响应（{len(raw_str)} 字符），开始解析 JSON",
+            detail={"raw_preview": raw_str[:200]},
+        )
+        return self._parse_intent(raw_str, request)
 
     def _analyze_with_heuristic(
         self, request: AnalyzeIntentRequest, fallback_reason: str | None = None

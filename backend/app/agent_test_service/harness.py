@@ -6,6 +6,7 @@ from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.action_executor import action_executor
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
+from app.agent_test_service.log_stream import set_context as set_log_context
 from app.agent_test_service.schemas import AnalyzeIntentRequest, StepExecutionRecord
 from app.agent_test_service.state import HarnessAgentState, utc_now
 from app.agent_test_service.step_verifier import step_verifier
@@ -65,6 +66,7 @@ async def capture_before_node(state: HarnessAgentState) -> HarnessAgentState:
 
 async def analyze_intent_node(state: HarnessAgentState) -> HarnessAgentState:
     step = _current_step(state)
+    set_log_context(state.get("run_id"), step.step_order)
     logger.info("[harness:analyze_intent] run=%s desc=%s", state.get("run_id"), step.description[:80])
     request = AnalyzeIntentRequest(
         step_description=state.get("current_description", step.description),
@@ -134,6 +136,7 @@ async def capture_after_node(state: HarnessAgentState) -> HarnessAgentState:
 
 async def verify_step_node(state: HarnessAgentState) -> HarnessAgentState:
     step = _current_step(state)
+    set_log_context(state.get("run_id"), step.step_order)
     intent = state.get("intent")
     before_image = state.get("before_image")
     after_image = state.get("after_image")

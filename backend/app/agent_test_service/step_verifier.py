@@ -9,6 +9,7 @@ from PIL import Image, ImageChops
 
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.llm_factory import llm_factory
+from app.agent_test_service.log_stream import emit as emit_live
 from app.agent_test_service.schemas import ActionIntent, VerificationResult
 from app.config import settings
 
@@ -50,18 +51,37 @@ class StepVerifier:
         mode = f"llm:{provider or 'default'}" if llm is not None else "diff"
         logger.info("[step_verifier] 开始验证 mode=%s desc=%s", mode, step_description[:80])
         if llm is not None:
+            model_name = verify_model_override or (
+                settings.agent_local_model if provider == "local" else settings.agent_llm_model
+            )
+            emit_live(
+                "verifier",
+                f"准备调用模型 provider={provider or 'default'} model={model_name}",
+                detail={"provider": provider or "default", "model": model_name},
+            )
             try:
                 result = await self._verify_with_llm(llm, step_description, before_image, after_image)
                 logger.info(
                     "[step_verifier] LLM 验证 provider=%s success=%s", provider, result.success
+                )
+                emit_live(
+                    "verifier",
+                    f"模型给出结论 success={result.success}",
+                    detail={"success": result.success, "confidence": result.confidence},
                 )
                 return result
             except Exception as exc:
                 logger.warning(
                     "[step_verifier] LLM(%s) 失败，回退像素差异: %s", provider, exc
                 )
+                emit_live(
+                    "verifier",
+                    f"LLM 调用失败，回退像素差异验证: {exc}",
+                    detail={"error": str(exc)},
+                )
                 return self._verify_with_diff(before_image, after_image, fallback_reason=str(exc))
 
+        emit_live("verifier", "未配置可用 LLM，使用像素差异验证")
         result = self._verify_with_diff(before_image, after_image)
         logger.info("[step_verifier] 像素差异验证 success=%s", result.success)
         return result
@@ -77,6 +97,7 @@ class StepVerifier:
         def normalize(url: str) -> str:
             return url if url.startswith("data:") else f"data:image/png;base64,{url}"
 
+        emit_live("verifier", "已发送执行前/后截图，等待模型响应...")
         response = await llm.ainvoke(
             [
                 SystemMessage(content=VERIFY_PROMPT),
@@ -94,7 +115,13 @@ class StepVerifier:
         raw = response.content
         if isinstance(raw, list):
             raw = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in raw)
-        return self._parse_result(str(raw))
+        raw_str = str(raw)
+        emit_live(
+            "verifier",
+            f"收到模型响应（{len(raw_str)} 字符），开始解析 JSON",
+            detail={"raw_preview": raw_str[:200]},
+        )
+        return self._parse_result(raw_str)
 
     def _verify_with_diff(
         self, before_image: str, after_image: str, fallback_reason: str | None = None
