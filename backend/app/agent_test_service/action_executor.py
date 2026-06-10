@@ -4,6 +4,7 @@ import base64
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.coordinate_mapper import image_pixels_to_device
 from app.agent_test_service.schemas import ActionIntent
+from app.config import settings
 from app.services.adb import adb_service
 
 logger = get_agent_logger()
@@ -17,6 +18,14 @@ class ActionExecutor:
         logger.debug("[action_executor] 截图完成 %dx%d", width, height)
         encoded = base64.b64encode(image_bytes).decode("ascii")
         return f"data:image/png;base64,{encoded}", width, height
+
+    async def capture_after_screen(self, serial: str | None) -> tuple[str, int, int]:
+        """执行后截图：先等待 UI 稳定，再截屏。"""
+        delay_ms = max(settings.agent_after_capture_delay_ms, 0)
+        if delay_ms > 0:
+            logger.info("[action_executor] 执行后等待 %dms 再截图 serial=%s", delay_ms, serial)
+            await asyncio.sleep(delay_ms / 1000)
+        return await self.capture_screen(serial)
 
     async def get_device_screen_size(self, serial: str | None) -> tuple[int, int]:
         return await asyncio.to_thread(adb_service.get_screen_size, serial)

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # 未在请求中指定 llm_provider 时的兜底：online | local | ""(=启发式)
     agent_default_provider: str = "local"
 
+    # 执行操作后、截取「执行后」图前的等待时间（毫秒）
+    agent_after_capture_delay_ms: int = 2000
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

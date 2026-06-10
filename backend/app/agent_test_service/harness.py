@@ -88,7 +88,7 @@ async def run_tool_node(state: HarnessAgentState) -> HarnessAgentState:
     step.status = "success" if tool_result.success else "failed"
     step.error = None if tool_result.success else tool_result.message
 
-    after_image, _, _ = await action_executor.capture_screen(serial)
+    after_image, _, _ = await action_executor.capture_after_screen(serial)
     step.after_image = after_image
 
     return {
@@ -195,7 +195,7 @@ async def execute_action_node(state: HarnessAgentState) -> HarnessAgentState:
 
 async def capture_after_node(state: HarnessAgentState) -> HarnessAgentState:
     logger.info("[harness:capture_after] run=%s", state.get("run_id"))
-    image, _, _ = await action_executor.capture_screen(state.get("serial"))
+    image, _, _ = await action_executor.capture_after_screen(state.get("serial"))
     step = _current_step(state)
     step.after_image = image
     return {
