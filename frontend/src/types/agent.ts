@@ -68,6 +68,7 @@ export interface AgentRunState {
   max_retries: number;
   error?: string | null;
   llm_provider?: string | null;
+  enable_verifier?: boolean;
   steps: AgentStepRecord[];
   attempts: StepAttemptRecord[];
   created_at: string;

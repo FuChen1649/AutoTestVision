@@ -27,6 +27,7 @@ class AgentRepository:
         serial: str | None,
         max_retries: int,
         llm_provider: str | None = None,
+        enable_verifier: bool = False,
     ) -> AgentRun:
         run = AgentRun(
             run_uuid=str(uuid.uuid4()),
@@ -39,6 +40,7 @@ class AgentRepository:
             retry_count=0,
             max_retries=max_retries,
             llm_provider=llm_provider,
+            enable_verifier=enable_verifier,
         )
         for step in sorted(case.steps, key=lambda item: item.step_order):
             run.steps.append(
@@ -260,6 +262,7 @@ class AgentRepository:
             max_retries=run.max_retries,
             error=run.error,
             llm_provider=run.llm_provider,
+            enable_verifier=bool(getattr(run, "enable_verifier", False)),
             steps=steps,
             attempts=self._attempts_to_records(run),
             created_at=run.created_at,

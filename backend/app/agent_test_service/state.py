@@ -28,6 +28,7 @@ class HarnessAgentState(TypedDict, total=False):
     max_retries: int
     error: str | None
     llm_provider: str | None
+    enable_verifier: bool
     steps: Annotated[list[StepExecutionRecord], merge_records]
     current_description: str
     current_step_type: str

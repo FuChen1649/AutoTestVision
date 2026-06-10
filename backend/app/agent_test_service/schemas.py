@@ -76,6 +76,7 @@ class StartRunRequest(BaseModel):
     auto_run: bool = False
     max_retries: int = Field(default=1, ge=0, le=3)
     llm_provider: str | None = None
+    enable_verifier: bool = False
 
 
 class RunStateResponse(BaseModel):
@@ -90,6 +91,7 @@ class RunStateResponse(BaseModel):
     max_retries: int
     error: str | None = None
     llm_provider: str | None = None
+    enable_verifier: bool = False
     steps: list[StepExecutionRecord] = Field(default_factory=list)
     attempts: list[StepAttemptRecord] = Field(default_factory=list)
     created_at: datetime

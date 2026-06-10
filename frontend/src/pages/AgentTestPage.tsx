@@ -30,6 +30,7 @@ export default function AgentTestPage() {
   const [agentReady, setAgentReady] = useState(true);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const [enableVerifier, setEnableVerifier] = useState(false);
 
   const executionAttempts = useMemo(() => run?.attempts ?? [], [run]);
 
@@ -140,7 +141,9 @@ export default function AgentTestPage() {
     setRunning(true);
 
     try {
-      const created = await agentApi.startRun(selectedCaseId, selectedProvider || null);
+      const created = await agentApi.startRun(selectedCaseId, selectedProvider || null, {
+        enableVerifier,
+      });
       setRun(created);
 
       stopStreamRef.current = agentApi.streamRun(created.run_id, {
@@ -343,14 +346,38 @@ export default function AgentTestPage() {
         </section>
 
         <section className="agent-panel agent-panel-logs">
-          <header className="agent-panel-header">
-            <h3>验证 Agent</h3>
-            <span>{running ? "执行中 · 实时跟踪" : "验证结果"}</span>
+          <header className="agent-panel-header agent-panel-header-with-toggle">
+            <div>
+              <h3>验证 Agent</h3>
+              <span>
+                {enableVerifier
+                  ? running
+                    ? "执行中 · 逐步验证"
+                    : "已开启逐步验证"
+                  : "已关闭 · 执行后直接下一步"}
+              </span>
+            </div>
+            <label
+              className="agent-verifier-toggle"
+              title="开启后每步执行完会调用验证 Agent 检查；关闭则跳过验证"
+            >
+              <input
+                type="checkbox"
+                checked={enableVerifier}
+                onChange={(event) => setEnableVerifier(event.target.checked)}
+                disabled={running}
+              />
+              <span>启用验证</span>
+            </label>
           </header>
           <div className="agent-panel-body agent-log-body" ref={verifierScrollRef}>
             {verifierLogs.length === 0 && (
               <div className="agent-panel-empty">
-                {running ? "等待步骤验证 Agent 开始工作..." : "尚无验证记录"}
+                {!enableVerifier
+                  ? "验证已关闭，执行完成后将自动进入下一步"
+                  : running
+                    ? "等待步骤验证 Agent 开始工作..."
+                    : "尚无验证记录"}
               </div>
             )}
             {verifierLogs.map((log) => {

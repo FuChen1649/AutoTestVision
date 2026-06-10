@@ -163,6 +163,37 @@
   font-size: 0.72rem;
 }
 
+.agent-panel-header-with-toggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-verifier-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #d1d5db;
+  font-size: 0.74rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-verifier-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: #22c55e;
+  cursor: pointer;
+}
+
+.agent-verifier-toggle:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .agent-panel-body {
   flex: 1;
   min-height: 0;

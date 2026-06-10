@@ -8,7 +8,7 @@ from app.agent_test_service.tools import agent_tools, is_tool_step
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.log_stream import set_context as set_log_context
-from app.agent_test_service.schemas import AnalyzeIntentRequest, StepExecutionRecord
+from app.agent_test_service.schemas import AnalyzeIntentRequest, StepExecutionRecord, VerificationResult
 from app.agent_test_service.state import HarnessAgentState, utc_now
 from app.agent_test_service.step_verifier import step_verifier
 
@@ -205,6 +205,29 @@ async def capture_after_node(state: HarnessAgentState) -> HarnessAgentState:
     }
 
 
+async def skip_verify_step_node(state: HarnessAgentState) -> HarnessAgentState:
+    """验证 Agent 关闭时：执行完成后直接标记成功并进入下一步。"""
+    step = _current_step(state)
+    logger.info(
+        "[harness:skip_verify] run=%s step=%d verifier=off",
+        state.get("run_id"),
+        step.step_order,
+    )
+    verification = VerificationResult(
+        success=True,
+        confidence=1.0,
+        reasoning="验证 Agent 已关闭，跳过步骤检查",
+    )
+    step.verification = verification
+    step.status = "success"
+    step.error = None
+    return {
+        "verification": verification,
+        "steps": _update_step(state, step),
+        "updated_at": utc_now(),
+    }
+
+
 async def verify_step_node(state: HarnessAgentState) -> HarnessAgentState:
     step = _current_step(state)
     set_log_context(state.get("run_id"), step.step_order)
@@ -280,6 +303,12 @@ async def advance_state_node(state: HarnessAgentState) -> HarnessAgentState:
     }
 
 
+def route_after_capture_after(state: HarnessAgentState) -> str:
+    if state.get("enable_verifier", False):
+        return "verify_step"
+    return "skip_verify_step"
+
+
 def route_after_advance(state: HarnessAgentState) -> str:
     if state.get("status") == "failed":
         return "finalize"
@@ -306,6 +335,7 @@ def build_harness_graph():
     graph.add_node("execute_action", execute_action_node)
     graph.add_node("capture_after", capture_after_node)
     graph.add_node("verify_step", verify_step_node)
+    graph.add_node("skip_verify_step", skip_verify_step_node)
     graph.add_node("advance_state", advance_state_node)
     graph.add_node("finalize", finalize_node)
 
@@ -322,8 +352,16 @@ def build_harness_graph():
     graph.add_edge("capture_before", "analyze_intent")
     graph.add_edge("analyze_intent", "execute_action")
     graph.add_edge("execute_action", "capture_after")
-    graph.add_edge("capture_after", "verify_step")
+    graph.add_conditional_edges(
+        "capture_after",
+        route_after_capture_after,
+        {
+            "verify_step": "verify_step",
+            "skip_verify_step": "skip_verify_step",
+        },
+    )
     graph.add_edge("verify_step", "advance_state")
+    graph.add_edge("skip_verify_step", "advance_state")
     graph.add_conditional_edges(
         "advance_state",
         route_after_advance,

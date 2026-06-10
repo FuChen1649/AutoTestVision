@@ -85,13 +85,18 @@ class AgentTestService:
             serial,
             payload.max_retries,
             llm_provider=resolved_provider,
+            enable_verifier=payload.enable_verifier,
         )
         await agent_repository.add_log(
             db,
             run,
             "system",
             f"已创建 Agent 运行实例，来源 Case #{case.id}",
-            detail={"case_name": case.name, "llm_provider": resolved_provider},
+            detail={
+                "case_name": case.name,
+                "llm_provider": resolved_provider,
+                "enable_verifier": payload.enable_verifier,
+            },
         )
         await agent_repository.commit(db)
         run = await agent_repository.get_run_by_uuid(db, run.run_uuid)
@@ -685,6 +690,32 @@ class AgentTestService:
                 after_image=step_record.after_image,
             )
 
+        elif node_name == "skip_verify_step" and step_record and step_record.verification:
+            verification = step_record.verification
+            await agent_repository.add_log(
+                db,
+                run,
+                "verifier",
+                "验证 Agent 已关闭，跳过本步检查",
+                step_order=step_record.step_order,
+                detail=verification.model_dump(),
+            )
+            await agent_repository.update_step(
+                db,
+                run,
+                step_record.step_order,
+                status=step_record.status,
+                verification=verification,
+                error=step_record.error,
+            )
+            await agent_repository.update_latest_attempt(
+                db,
+                run,
+                step_record.step_order,
+                status=step_record.status,
+                error=step_record.error,
+            )
+
         elif node_name == "verify_step" and step_record and step_record.verification:
             verification = step_record.verification
             await agent_repository.add_log(
@@ -786,6 +817,7 @@ class AgentTestService:
             "max_retries": run.max_retries,
             "error": run.error,
             "llm_provider": run.llm_provider,
+            "enable_verifier": bool(getattr(run, "enable_verifier", False)),
             "steps": steps,
             "should_continue": run.status not in {"completed", "failed", "cancelled"},
             "created_at": run.created_at,

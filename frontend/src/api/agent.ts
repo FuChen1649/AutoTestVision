@@ -58,12 +58,17 @@ export const agentApi = {
 
   listProviders: () => request<ProvidersResponse>("/providers"),
 
-  startRun: (caseId: number, llmProvider?: string | null) =>
+  startRun: (
+    caseId: number,
+    llmProvider?: string | null,
+    options?: { enableVerifier?: boolean }
+  ) =>
     request<AgentRunState>("/runs", {
       method: "POST",
       body: JSON.stringify({
         case_id: caseId,
         auto_run: false,
+        enable_verifier: options?.enableVerifier ?? false,
         ...(llmProvider ? { llm_provider: llmProvider } : {}),
       }),
     }),
