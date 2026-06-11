@@ -29,6 +29,15 @@ export interface VerificationResult {
   reasoning?: string;
 }
 
+export interface StepPurposeReviewRecord {
+  step_order: number;
+  purpose: string;
+  reasoning: string;
+  confidence?: number;
+  model?: string | null;
+  reviewed_at: string;
+}
+
 export interface StepAttemptRecord {
   step_order: number;
   attempt_index: number;
@@ -54,6 +63,7 @@ export interface AgentStepRecord {
   after_image?: string | null;
   error?: string | null;
   metadata?: Record<string, unknown> | null;
+  purpose_review?: StepPurposeReviewRecord | null;
 }
 
 export interface AgentRunState {

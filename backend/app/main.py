@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import agent_test, cases, device
+from app.api import agent_test, cases, device, result_verify
 from app.config import settings
 from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
@@ -32,6 +32,7 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS enable_verifier BOOLEAN DEFAULT FALSE",
             "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS batch_id INTEGER",
             "ALTER TABLE agent_batch_runs ADD COLUMN IF NOT EXISTS case_ids_json TEXT",
+            "ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS purpose_review_json TEXT",
         ):
             await conn.execute(text(ddl))
     async with async_session() as db:
@@ -54,6 +55,7 @@ app.add_middleware(
 app.include_router(cases.router, prefix="/api")
 app.include_router(device.router, prefix="/api")
 app.include_router(agent_test.router, prefix="/api")
+app.include_router(result_verify.router, prefix="/api")
 
 
 @app.get("/api/health")

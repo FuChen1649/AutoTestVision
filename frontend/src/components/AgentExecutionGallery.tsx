@@ -13,6 +13,7 @@ interface AgentExecutionGalleryProps {
   runId?: string | null;
   runStatus?: string;
   agentRunning?: boolean;
+  verifyingStepOrder?: number | null;
 }
 
 interface LightboxState {
@@ -112,6 +113,7 @@ export default function AgentExecutionGallery({
   runId = null,
   runStatus = "",
   agentRunning = false,
+  verifyingStepOrder = null,
 }: AgentExecutionGalleryProps) {
   const [lightbox, setLightbox] = useState<LightboxState | null>(null);
   const [replayOpen, setReplayOpen] = useState(false);
@@ -142,6 +144,16 @@ export default function AgentExecutionGallery({
   );
 
   const deviceReplaySteps = useMemo(() => buildDeviceReplaySteps(steps), [steps]);
+
+  const purposeByStep = useMemo(() => {
+    const map = new Map<number, NonNullable<AgentStepRecord["purpose_review"]>>();
+    steps.forEach((step) => {
+      if (step.purpose_review) {
+        map.set(step.step_order, step.purpose_review);
+      }
+    });
+    return map;
+  }, [steps]);
 
   const canDeviceReplay =
     Boolean(runId) &&
@@ -253,6 +265,12 @@ export default function AgentExecutionGallery({
           const label = attemptLabel(attempt);
           const beforeSrc = attempt.before_image_annotated || attempt.before_image;
           const hint = actionHint(attempt);
+          const purposeReview = purposeByStep.get(attempt.step_order);
+          const lastAttemptIndex = sortedAttempts
+            .filter((item) => item.step_order === attempt.step_order)
+            .reduce((max, item) => Math.max(max, item.attempt_index), -1);
+          const showPurposeReview =
+            purposeReview && attempt.attempt_index === lastAttemptIndex;
           const key = `${attempt.step_order}-${attempt.attempt_index}`;
           return (
             <article
@@ -311,6 +329,23 @@ export default function AgentExecutionGallery({
               {attempt.error && attempt.status === "failed" && (
                 <p className="agent-attempt-error">{attempt.error}</p>
               )}
+              {showPurposeReview && (
+                <div className="agent-attempt-purpose-review">
+                  <strong>执行目的</strong>
+                  <p>{purposeReview.purpose}</p>
+                  {purposeReview.reasoning && (
+                    <p className="agent-attempt-purpose-reasoning">{purposeReview.reasoning}</p>
+                  )}
+                </div>
+              )}
+              {!showPurposeReview &&
+                verifyingStepOrder === attempt.step_order &&
+                attempt.attempt_index === lastAttemptIndex && (
+                  <div className="agent-attempt-purpose-review agent-attempt-purpose-pending">
+                    <strong>执行目的</strong>
+                    <p>验证中...</p>
+                  </div>
+                )}
             </article>
           );
         })}

@@ -16,6 +16,7 @@ from app.agent_test_service.schemas import (
     RunStateResponse,
     StepAttemptRecord,
     StepExecutionRecord,
+    StepPurposeReviewRecord,
     VerificationResult,
 )
 from app.agent_test_service.tools import parse_step_metadata
@@ -256,6 +257,12 @@ class AgentRepository:
                 intent = ActionIntent.model_validate_json(step.intent_json)
             if step.verification_json:
                 verification = VerificationResult.model_validate_json(step.verification_json)
+            purpose_review = None
+            if step.purpose_review_json:
+                try:
+                    purpose_review = StepPurposeReviewRecord.model_validate_json(step.purpose_review_json)
+                except Exception:
+                    purpose_review = None
             steps.append(
                 StepExecutionRecord(
                     step_order=step.step_order,
@@ -274,6 +281,7 @@ class AgentRepository:
                     reference_height=step.reference_height,
                     error=step.error,
                     metadata=parse_step_metadata(step.metadata_json),
+                    purpose_review=purpose_review,
                 )
             )
 

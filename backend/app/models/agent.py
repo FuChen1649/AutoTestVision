@@ -121,6 +121,7 @@ class AgentRunStep(Base):
     after_image: Mapped[str | None] = mapped_column(Text, nullable=True)
     intent_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     verification_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    purpose_review_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -25,6 +25,15 @@ class VerificationResult(BaseModel):
     reasoning: str = ""
 
 
+class StepPurposeReviewRecord(BaseModel):
+    step_order: int
+    purpose: str = ""
+    reasoning: str = ""
+    confidence: float = Field(ge=0, le=1, default=0.0)
+    model: str | None = None
+    reviewed_at: datetime
+
+
 class StepAttemptRecord(BaseModel):
     step_order: int
     attempt_index: int
@@ -55,6 +64,7 @@ class StepExecutionRecord(BaseModel):
     reference_height: int | None = None
     error: str | None = None
     metadata: dict | None = None
+    purpose_review: StepPurposeReviewRecord | None = None
 
 
 class AnalyzeIntentRequest(BaseModel):
