@@ -20,18 +20,20 @@ export default function AppNav({ open, activePage, onNavigate, onClose }: AppNav
         </div>
         <nav className="app-nav-list">
           {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              className={activePage === item.id ? "app-nav-item active" : "app-nav-item"}
-              type="button"
-              onClick={() => {
-                onNavigate(item.id);
-                onClose();
-              }}
-            >
-              <span className="app-nav-item-label">{item.label}</span>
-              <span className="app-nav-item-desc">{item.description}</span>
-            </button>
+            <div key={item.id} className="app-nav-entry">
+              {item.dividerBefore && <hr className="app-nav-divider" />}
+              <button
+                className={activePage === item.id ? "app-nav-item active" : "app-nav-item"}
+                type="button"
+                onClick={() => {
+                  onNavigate(item.id);
+                  onClose();
+                }}
+              >
+                <span className="app-nav-item-label">{item.label}</span>
+                <span className="app-nav-item-desc">{item.description}</span>
+              </button>
+            </div>
           ))}
         </nav>
       </aside>

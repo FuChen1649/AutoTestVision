@@ -101,6 +101,18 @@
   padding: 12px;
 }
 
+.app-nav-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-nav-divider {
+  margin: 8px 4px;
+  border: none;
+  border-top: 1px solid #374151;
+}
+
 .app-nav-item {
   display: flex;
   flex-direction: column;

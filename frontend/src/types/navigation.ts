@@ -1,9 +1,15 @@
-export type AppPageId = "case-builder" | "agent-test" | "result";
+export type AppPageId =
+  | "case-builder"
+  | "agent-test"
+  | "result"
+  | "data-cleaning"
+  | "data-flywheel";
 
 export interface NavItem {
   id: AppPageId;
   label: string;
   description: string;
+  dividerBefore?: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -21,5 +27,16 @@ export const NAV_ITEMS: NavItem[] = [
     id: "result",
     label: "Result",
     description: "批量执行结果与回放",
+  },
+  {
+    id: "data-cleaning",
+    label: "数据清洗",
+    description: "数据清洗（建设中）",
+    dividerBefore: true,
+  },
+  {
+    id: "data-flywheel",
+    label: "数据飞轮",
+    description: "数据飞轮（建设中）",
   },
 ];
