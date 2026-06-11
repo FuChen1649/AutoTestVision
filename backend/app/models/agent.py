@@ -6,11 +6,68 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+class AgentBatchRun(Base):
+    __tablename__ = "agent_batch_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_uuid: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(Text, default="pending")
+    serial: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enable_verifier: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    total_cases: Mapped[int] = mapped_column(Integer, default=0)
+    completed_cases: Mapped[int] = mapped_column(Integer, default=0)
+    passed_cases: Mapped[int] = mapped_column(Integer, default=0)
+    failed_cases: Mapped[int] = mapped_column(Integer, default=0)
+    case_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    results: Mapped[list["AgentBatchResult"]] = relationship(
+        "AgentBatchResult",
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="AgentBatchResult.case_order",
+    )
+    runs: Mapped[list["AgentRun"]] = relationship("AgentRun", back_populates="batch")
+
+
+class AgentBatchResult(Base):
+    __tablename__ = "agent_batch_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_batch_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    run_uuid: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    case_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    case_name: Mapped[str] = mapped_column(Text, default="")
+    case_order: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(Text, default="pending")
+    total_steps: Mapped[int] = mapped_column(Integer, default=0)
+    passed_steps: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    batch: Mapped["AgentBatchRun"] = relationship("AgentBatchRun", back_populates="results")
+    run: Mapped["AgentRun"] = relationship("AgentRun", back_populates="batch_result")
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_uuid: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_batch_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     source_case_id: Mapped[int] = mapped_column(Integer, nullable=False)
     case_name: Mapped[str] = mapped_column(Text, default="")
     serial: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -38,6 +95,10 @@ class AgentRun(Base):
         back_populates="run",
         cascade="all, delete-orphan",
         order_by="AgentRunStepAttempt.step_order,AgentRunStepAttempt.attempt_index",
+    )
+    batch: Mapped["AgentBatchRun | None"] = relationship("AgentBatchRun", back_populates="runs")
+    batch_result: Mapped["AgentBatchResult | None"] = relationship(
+        "AgentBatchResult", back_populates="run", uselist=False
     )
 
 

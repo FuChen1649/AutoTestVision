@@ -5,6 +5,7 @@ import AgentExecutionGallery from "../components/AgentExecutionGallery";
 import type {
   AgentLogItem,
   AgentRunState,
+  BatchState,
   CaseListItem,
   ProviderInfo,
 } from "../types/agent";
@@ -31,6 +32,9 @@ export default function AgentTestPage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [enableVerifier, setEnableVerifier] = useState(false);
+  const [batch, setBatch] = useState<BatchState | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [aborting, setAborting] = useState(false);
 
   const executionAttempts = useMemo(() => run?.attempts ?? [], [run]);
 
@@ -129,8 +133,76 @@ export default function AgentTestPage() {
     setVerifierLogs((prev) => mergeLogs(prev, logs.filter((item) => item.agent_type === "verifier")));
   };
 
+  const handleBatchStart = async () => {
+    if (running || batchRunning) {
+      return;
+    }
+
+    stopStreamRef.current?.();
+    setError(null);
+
+    try {
+      const allCases = await agentApi.listCases();
+      if (allCases.length === 0) {
+        setError("没有可执行的 Case");
+        return;
+      }
+      const confirmed = window.confirm(
+        `将按顺序执行全部 ${allCases.length} 个 Case（验证器默认关闭）。确定开始批量执行？`
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setIntentLogs([]);
+      setVerifierLogs([]);
+      setBatch(null);
+      setBatchRunning(true);
+      setRunning(true);
+
+      const created = await agentApi.startBatch(selectedProvider || null, {
+        enableVerifier: false,
+      });
+      setBatch(created);
+
+      stopStreamRef.current = agentApi.streamBatch(created.batch_id, {
+        onEvent: (event) => {
+          if (event.type === "error") {
+            setError(event.message || "批量执行异常");
+          }
+          if (event.type === "case_start") {
+            setIntentLogs([]);
+            setVerifierLogs([]);
+          }
+          if (event.batch) {
+            setBatch(event.batch);
+          }
+          if (event.run) {
+            setRun(event.run);
+          }
+          if (event.logs?.length) {
+            appendLogs(event.logs);
+          }
+          if (event.type === "done" || event.type === "error") {
+            stopStreamRef.current?.();
+            stopStreamRef.current = null;
+          }
+        },
+        onError: (err) => setError(err.message),
+        onDone: () => {
+          setBatchRunning(false);
+          setRunning(false);
+        },
+      });
+    } catch (err) {
+      setBatchRunning(false);
+      setRunning(false);
+      setError(err instanceof Error ? err.message : "启动批量执行失败");
+    }
+  };
+
   const handleStart = async () => {
-    if (!selectedCaseId || running) {
+    if (!selectedCaseId || running || batchRunning) {
       return;
     }
 
@@ -167,20 +239,41 @@ export default function AgentTestPage() {
     }
   };
 
-  const handleCancel = async () => {
-    if (!run?.run_id) {
+  const handleAbort = async () => {
+    if (aborting || (!running && !batchRunning)) {
       return;
     }
-    stopStreamRef.current?.();
-    stopStreamRef.current = null;
+
+    setError(null);
+    setAborting(true);
+
     try {
-      await agentApi.cancelRun(run.run_id);
-      const latest = await agentApi.getRun(run.run_id);
-      setRun(latest);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "取消失败");
-    } finally {
+      if (batchRunning && batch?.batch_id) {
+        const latest = await agentApi.cancelBatch(batch.batch_id);
+        setBatch(latest);
+        if (latest.status === "cancelled") {
+          setBatchRunning(false);
+          setRunning(false);
+          stopStreamRef.current?.();
+          stopStreamRef.current = null;
+        }
+        return;
+      }
+
+      stopStreamRef.current?.();
+      stopStreamRef.current = null;
+
+      if (run?.run_id) {
+        await agentApi.cancelRun(run.run_id);
+        const latest = await agentApi.getRun(run.run_id);
+        setRun(latest);
+      }
       setRunning(false);
+      setBatchRunning(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "中止失败");
+    } finally {
+      setAborting(false);
     }
   };
 
@@ -189,7 +282,13 @@ export default function AgentTestPage() {
       <header className="agent-test-toolbar">
         <div className="agent-test-toolbar-left">
           <span className="agent-test-toolbar-title">Agent 测试执行</span>
-          {run && (
+          {batchRunning && batch && (
+            <span className="agent-test-run-badge">
+              批量执行 · {batch.completed_cases}/{batch.total_cases} · {batch.status}
+              {batch.llm_provider ? ` · ${batch.llm_provider}` : ""}
+            </span>
+          )}
+          {!batchRunning && run && (
             <span className="agent-test-run-badge">
               {run.case_name} · {run.status} · 步骤{" "}
               {(activeStepOrder ?? run.current_step_index) + 1}/{run.total_steps}
@@ -203,7 +302,7 @@ export default function AgentTestPage() {
             <select
               value={selectedProvider}
               onChange={(event) => setSelectedProvider(event.target.value)}
-              disabled={running || providers.length === 0}
+              disabled={running || batchRunning || providers.length === 0}
               title={
                 providers.length === 0
                   ? "未检测到任何可达模型（本地 Ollama / 在线 LLM 均连不上）"
@@ -221,7 +320,7 @@ export default function AgentTestPage() {
               type="button"
               className="agent-test-provider-refresh"
               onClick={() => void loadProviders()}
-              disabled={running}
+              disabled={running || batchRunning}
               title="重新探测模型可达性"
             >
               ↻
@@ -233,18 +332,26 @@ export default function AgentTestPage() {
           <button
             className="primary-btn"
             type="button"
-            disabled={!selectedCaseId || running || !agentReady}
+            disabled={!selectedCaseId || running || batchRunning || !agentReady}
             onClick={() => void handleStart()}
           >
-            {running ? "执行中..." : "开始执行"}
+            {running && !batchRunning ? "执行中..." : "开始执行"}
           </button>
           <button
             className="secondary-btn"
             type="button"
-            disabled={!run || !running}
-            onClick={() => void handleCancel()}
+            disabled={running || batchRunning || !agentReady}
+            onClick={() => void handleBatchStart()}
           >
-            取消
+            {batchRunning ? "批量执行中..." : "批量执行"}
+          </button>
+          <button
+            className="secondary-btn"
+            type="button"
+            disabled={(!running && !batchRunning) || aborting}
+            onClick={() => void handleAbort()}
+          >
+            {aborting ? "中止中..." : "中止"}
           </button>
         </div>
       </header>
@@ -365,7 +472,7 @@ export default function AgentTestPage() {
                 type="checkbox"
                 checked={enableVerifier}
                 onChange={(event) => setEnableVerifier(event.target.checked)}
-                disabled={running}
+                disabled={running || batchRunning}
               />
               <span>启用验证</span>
             </label>

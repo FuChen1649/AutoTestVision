@@ -113,3 +113,54 @@ export interface DeviceReplayStreamEvent {
   total_steps?: number | null;
   action?: string | null;
 }
+
+export interface BatchResultItem {
+  result_id: number;
+  run_id: string;
+  case_id: number;
+  case_name: string;
+  case_order: number;
+  status: string;
+  total_steps: number;
+  passed_steps: number;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchState {
+  batch_id: string;
+  status: string;
+  serial?: string | null;
+  llm_provider?: string | null;
+  enable_verifier?: boolean;
+  total_cases: number;
+  completed_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  error?: string | null;
+  results: BatchResultItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchListItem {
+  batch_id: string;
+  status: string;
+  total_cases: number;
+  completed_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  llm_provider?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchStreamEvent {
+  type: string;
+  batch?: BatchState | null;
+  result?: BatchResultItem | null;
+  run?: AgentRunState | null;
+  logs?: AgentLogItem[];
+  message?: string | null;
+}

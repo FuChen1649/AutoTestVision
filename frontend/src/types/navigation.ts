@@ -1,4 +1,4 @@
-export type AppPageId = "case-builder" | "agent-test";
+export type AppPageId = "case-builder" | "agent-test" | "result";
 
 export interface NavItem {
   id: AppPageId;
@@ -16,5 +16,10 @@ export const NAV_ITEMS: NavItem[] = [
     id: "agent-test",
     label: "AgentTest",
     description: "Agent 测试与执行",
+  },
+  {
+    id: "result",
+    label: "Result",
+    description: "批量执行结果与回放",
   },
 ];

@@ -12,18 +12,22 @@ from app.agent_test_service.action_executor import action_executor
 from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.llm_factory import default_provider, probe_providers
-from app.agent_test_service import log_stream
+from app.agent_test_service import batch_registry, log_stream, run_registry
 from app.agent_test_service.repository import agent_repository
 from app.agent_test_service.schemas import (
     ActionIntent,
     AgentLogItem,
     AgentLogsResponse,
     AnalyzeIntentRequest,
+    BatchListItem,
+    BatchStateResponse,
+    BatchStreamEvent,
     CaseListItem,
     DeviceReplayStreamEvent,
     ProviderInfo,
     ProvidersResponse,
     RunStateResponse,
+    StartBatchRequest,
     StartRunRequest,
     StepAdvanceResponse,
     StepExecutionRecord,
@@ -31,7 +35,8 @@ from app.agent_test_service.schemas import (
 )
 from app.agent_test_service.tools import agent_tools, is_tool_step, parse_step_metadata
 from app.agent_test_service.state import HarnessAgentState, merge_records, utc_now
-from app.models.agent import AgentRun
+from app.database import async_session
+from app.models.agent import AgentBatchRun, AgentRun
 from app.models.case import Case
 from app.services.adb import adb_service
 
@@ -193,6 +198,7 @@ class AgentTestService:
         await agent_repository.commit(db)
 
         live_queue = log_stream.subscribe(run_uuid)
+        run_registry.register(run_uuid)
 
         yield self._sse(StreamEvent(type="start", run=agent_repository.to_response(run)))
 
@@ -211,7 +217,11 @@ class AgentTestService:
                     state.get("max_retries", 0),
                 )
                 async for event in harness_graph.astream(state, stream_mode="updates", config=config):
+                    if run_registry.is_cancel_requested(run_uuid):
+                        break
                     await out_queue.put(("harness", event))
+            except asyncio.CancelledError:
+                logger.info("[service:stream_run] harness 已中止 run_id=%s", run_uuid)
             except Exception as exc:
                 logger.exception("[service:stream_run] harness 异常 run_id=%s", run_uuid)
                 await out_queue.put(("error", exc))
@@ -227,12 +237,20 @@ class AgentTestService:
                 pass
 
         harness_task = asyncio.create_task(feed_harness())
+        run_registry.set_harness_task(run_uuid, harness_task)
         live_task = asyncio.create_task(feed_live_logs())
 
         try:
             should_stop = False
             while not should_stop:
-                kind, payload = await out_queue.get()
+                try:
+                    kind, payload = await asyncio.wait_for(out_queue.get(), timeout=0.4)
+                except asyncio.TimeoutError:
+                    if await self._is_run_aborted(db, run_uuid):
+                        should_stop = True
+                        if not harness_task.done():
+                            harness_task.cancel()
+                    continue
                 if kind == "__end__":
                     break
                 if kind == "error":
@@ -297,6 +315,7 @@ class AgentTestService:
                     pass
             log_stream.release(run_uuid)
             log_stream.set_context(None, None)
+            run_registry.release(run_uuid)
 
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         assert run is not None
@@ -304,11 +323,20 @@ class AgentTestService:
             await agent_repository.update_run_fields(db, run, status="completed")
             await agent_repository.commit(db)
             run = await agent_repository.get_run_by_uuid(db, run_uuid)
+        elif run.status == "cancelled" and not run.error:
+            await agent_repository.update_run_fields(db, run, error="用户中止")
+            await agent_repository.commit(db)
+            run = await agent_repository.get_run_by_uuid(db, run_uuid)
+        message = (
+            "执行已中止"
+            if run and run.status == "cancelled"
+            else f"执行结束：{run.status if run else 'unknown'}"
+        )
         yield self._sse(
             StreamEvent(
                 type="done",
                 run=agent_repository.to_response(run) if run else None,
-                message=f"执行结束：{run.status if run else 'unknown'}",
+                message=message,
             )
         )
 
@@ -317,10 +345,290 @@ class AgentTestService:
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         if not run:
             return False
+        if run.status in {"completed", "failed", "cancelled"}:
+            return True
+        run_registry.request_cancel(run_uuid)
         await agent_repository.update_run_fields(db, run, status="cancelled")
-        await agent_repository.add_log(db, run, "system", "运行已取消")
+        await agent_repository.add_log(db, run, "system", "运行已中止")
         await agent_repository.commit(db)
         return True
+
+    async def cancel_batch(self, batch_uuid: str, db: AsyncSession) -> BatchStateResponse | None:
+        logger.info("[service:cancel_batch] batch_id=%s", batch_uuid)
+        batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+        if not batch:
+            return None
+
+        batch_registry.request_cancel(batch_uuid)
+        current_run = batch_registry.current_run_uuid(batch_uuid)
+        if current_run:
+            await self.cancel_run(current_run, db)
+        if batch.status in {"pending", "running"}:
+            await agent_repository.update_batch_fields(
+                db, batch, status="cancelled", error="用户中止"
+            )
+            await agent_repository.commit(db)
+
+        batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+        if not batch:
+            return None
+        return agent_repository.to_batch_response(batch)
+
+    async def start_batch(self, payload: StartBatchRequest, db: AsyncSession) -> BatchStateResponse:
+        logger.info("[service:start_batch] case_ids=%s", payload.case_ids)
+        cases = await self._load_cases_for_batch(db, payload.case_ids)
+        serial = payload.serial or adb_service.get_active_serial()
+        if not serial:
+            devices = adb_service.list_devices()
+            if not devices:
+                raise RuntimeError("未连接设备")
+            serial = devices[0].serial
+            adb_service.set_active_device(serial)
+
+        resolved_provider = payload.llm_provider or default_provider()
+        batch = await agent_repository.create_batch(
+            db,
+            serial=serial,
+            total_cases=len(cases),
+            case_ids=[case.id for case in cases],
+            llm_provider=resolved_provider,
+            enable_verifier=payload.enable_verifier,
+        )
+        logger.info(
+            "[service:start_batch] batch_id=%s cases=%d provider=%s",
+            batch.batch_uuid,
+            len(cases),
+            resolved_provider,
+        )
+        return agent_repository.to_batch_response(batch)
+
+    async def get_batch(self, batch_uuid: str, db: AsyncSession) -> BatchStateResponse | None:
+        batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+        if not batch:
+            return None
+        return agent_repository.to_batch_response(batch)
+
+    async def list_batches(self, db: AsyncSession, limit: int = 50) -> list[BatchListItem]:
+        batches = await agent_repository.list_batches(db, limit=limit)
+        return [agent_repository.to_batch_list_item(item) for item in batches]
+
+    async def stream_batch(self, batch_uuid: str) -> AsyncGenerator[str, None]:
+        logger.info("[service:stream_batch] batch_id=%s", batch_uuid)
+        async with async_session() as db:
+            async for event in self._stream_batch_with_session(batch_uuid, db):
+                yield event
+
+    async def _stream_batch_with_session(
+        self, batch_uuid: str, db: AsyncSession
+    ) -> AsyncGenerator[str, None]:
+        batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+        if not batch:
+            raise RuntimeError("批量任务不存在")
+        if batch.status in {"completed", "failed", "cancelled"}:
+            yield self._batch_sse(
+                BatchStreamEvent(
+                    type="done",
+                    batch=agent_repository.to_batch_response(batch),
+                    message=f"批量任务已结束：{batch.status}",
+                )
+            )
+            return
+
+        case_ids = json.loads(batch.case_ids_json or "[]")
+        if not case_ids:
+            raise RuntimeError("批量任务未包含可执行 Case")
+        cases = await self._load_cases_by_ids(db, case_ids)
+
+        await agent_repository.update_batch_fields(db, batch, status="running")
+        await agent_repository.commit(db)
+        batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+        assert batch is not None
+        yield self._batch_sse(
+            BatchStreamEvent(type="start", batch=agent_repository.to_batch_response(batch))
+        )
+
+        completed = batch.completed_cases
+        passed = batch.passed_cases
+        failed = batch.failed_cases
+        existing_orders = {item.case_order for item in batch.results}
+        batch_registry.register(batch_uuid)
+
+        try:
+            for case_order, case in enumerate(cases):
+                if batch_registry.is_cancel_requested(batch_uuid):
+                    break
+                if case_order in existing_orders:
+                    continue
+                if not case.steps:
+                    logger.warning("[service:stream_batch] 跳过无步骤 Case #%d", case.id)
+                    continue
+
+                run = await agent_repository.create_run(
+                    db,
+                    case,
+                    batch.serial,
+                    max_retries=1,
+                    llm_provider=batch.llm_provider,
+                    enable_verifier=batch.enable_verifier,
+                    batch_id=batch.id,
+                    auto_commit=False,
+                )
+                await agent_repository.add_log(
+                    db,
+                    run,
+                    "system",
+                    f"批量任务 {batch.batch_uuid} · Case #{case.id}",
+                    detail={"batch_id": batch.batch_uuid, "case_order": case_order},
+                )
+                await agent_repository.commit(db)
+
+                run = await agent_repository.get_run_by_uuid(db, run.run_uuid)
+                batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+                assert run is not None and batch is not None
+                batch_registry.set_current_run(batch_uuid, run.run_uuid, case_order)
+
+                yield self._batch_sse(
+                    BatchStreamEvent(
+                        type="case_start",
+                        batch=agent_repository.to_batch_response(batch),
+                        run=agent_repository.to_response(run),
+                        message=f"开始执行 Case：{case.name}",
+                    )
+                )
+
+                aborted_case = False
+                async for chunk in self.stream_run(run.run_uuid, db):
+                    if batch_registry.is_cancel_requested(batch_uuid):
+                        aborted_case = True
+                    event = self._parse_sse_chunk(chunk)
+                    if not event or not (event.run or event.logs):
+                        continue
+                    batch_response = None
+                    if event.run:
+                        batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+                        if batch:
+                            batch_response = agent_repository.to_batch_response(batch)
+                    yield self._batch_sse(
+                        BatchStreamEvent(
+                            type="case_progress",
+                            batch=batch_response,
+                            run=event.run,
+                            logs=event.logs or [],
+                        )
+                    )
+                    if aborted_case or (
+                        event.run and event.run.status in {"cancelled", "failed"}
+                    ):
+                        aborted_case = True
+                        break
+
+                run = await agent_repository.get_run_by_uuid(db, run.run_uuid)
+                batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+                assert run is not None and batch is not None
+
+                completed, passed, failed, result = await self._record_batch_case_result(
+                    db,
+                    batch,
+                    run,
+                    case_order,
+                    completed,
+                    passed,
+                    failed,
+                )
+                existing_orders.add(case_order)
+                batch_registry.set_current_run(batch_uuid, None, None)
+                batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+                run = await agent_repository.get_run_by_uuid(db, run.run_uuid)
+                assert batch is not None and run is not None
+
+                yield self._batch_sse(
+                    BatchStreamEvent(
+                        type="case_done",
+                        batch=agent_repository.to_batch_response(batch),
+                        result=agent_repository.batch_result_to_item(result),
+                        run=agent_repository.to_response(run),
+                        message=f"Case 结束：{case.name} · {run.status}",
+                    )
+                )
+
+                if batch_registry.is_cancel_requested(batch_uuid):
+                    break
+
+            batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+            assert batch is not None
+            if batch_registry.is_cancel_requested(batch_uuid):
+                final_status = "cancelled"
+                message = f"批量执行已中止：已完成 {completed}/{batch.total_cases}"
+            elif failed > 0:
+                final_status = "failed"
+                message = f"批量执行结束：通过 {passed}/{batch.total_cases}"
+            else:
+                final_status = "completed"
+                message = f"批量执行结束：通过 {passed}/{batch.total_cases}"
+
+            await agent_repository.update_batch_fields(
+                db,
+                batch,
+                status=final_status,
+                completed_cases=completed,
+                passed_cases=passed,
+                failed_cases=failed,
+            )
+            await agent_repository.commit(db)
+            batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+            assert batch is not None
+            yield self._batch_sse(
+                BatchStreamEvent(
+                    type="done",
+                    batch=agent_repository.to_batch_response(batch),
+                    message=message,
+                )
+            )
+        except Exception as exc:
+            logger.exception("[service:stream_batch] 批量执行异常 batch_id=%s", batch_uuid)
+            batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+            if batch:
+                current_run_uuid = batch_registry.current_run_uuid(batch_uuid)
+                current_case_order = batch_registry.current_case_order(batch_uuid)
+                if (
+                    current_run_uuid
+                    and current_case_order is not None
+                    and batch_registry.is_cancel_requested(batch_uuid)
+                ):
+                    run = await agent_repository.get_run_by_uuid(db, current_run_uuid)
+                    if run:
+                        try:
+                            completed, passed, failed, _ = await self._record_batch_case_result(
+                                db,
+                                batch,
+                                run,
+                                current_case_order,
+                                completed,
+                                passed,
+                                failed,
+                            )
+                        except Exception:
+                            logger.exception("[service:stream_batch] 中止时保存 Case 结果失败")
+                await agent_repository.update_batch_fields(
+                    db,
+                    batch,
+                    status="failed" if not batch_registry.is_cancel_requested(batch_uuid) else "cancelled",
+                    completed_cases=completed,
+                    passed_cases=passed,
+                    failed_cases=failed,
+                    error=str(exc),
+                )
+                await agent_repository.commit(db)
+                batch = await agent_repository.get_batch_by_uuid(db, batch_uuid)
+            yield self._batch_sse(
+                BatchStreamEvent(
+                    type="error",
+                    batch=agent_repository.to_batch_response(batch) if batch else None,
+                    message=str(exc),
+                )
+            )
+        finally:
+            batch_registry.release(batch_uuid)
 
     async def stream_device_replay(
         self,
@@ -826,6 +1134,80 @@ class AgentTestService:
 
     def _sse(self, event: StreamEvent) -> str:
         return f"data: {event.model_dump_json()}\n\n"
+
+    async def _record_batch_case_result(
+        self,
+        db: AsyncSession,
+        batch: AgentBatchRun,
+        run: AgentRun,
+        case_order: int,
+        completed: int,
+        passed: int,
+        failed: int,
+    ) -> tuple[int, int, int, object]:
+        batch = await agent_repository.get_batch_by_uuid(db, batch.batch_uuid)
+        assert batch is not None
+        already_exists = any(item.case_order == case_order for item in batch.results)
+        result = await agent_repository.create_batch_result(db, batch, run, case_order)
+        if not already_exists:
+            completed += 1
+            if run.status == "completed":
+                passed += 1
+            else:
+                failed += 1
+        await agent_repository.update_batch_fields(
+            db,
+            batch,
+            completed_cases=completed,
+            passed_cases=passed,
+            failed_cases=failed,
+        )
+        await agent_repository.commit(db)
+        return completed, passed, failed, result
+
+    def _batch_sse(self, event: BatchStreamEvent) -> str:
+        return f"data: {event.model_dump_json()}\n\n"
+
+    async def _is_run_aborted(self, db: AsyncSession, run_uuid: str) -> bool:
+        if run_registry.is_cancel_requested(run_uuid):
+            return True
+        run = await agent_repository.get_run_by_uuid(db, run_uuid)
+        return bool(run and run.status == "cancelled")
+
+    def _parse_sse_chunk(self, chunk: str) -> StreamEvent | None:
+        line = chunk.strip()
+        if not line.startswith("data: "):
+            return None
+        try:
+            return StreamEvent.model_validate_json(line.removeprefix("data: ").strip())
+        except Exception:
+            return None
+
+    async def _load_cases_for_batch(self, db: AsyncSession, case_ids: list[int]) -> list[Case]:
+        if case_ids:
+            return await self._load_cases_by_ids(db, case_ids)
+        result = await db.execute(
+            select(Case).options(selectinload(Case.steps)).order_by(Case.updated_at.desc())
+        )
+        cases = [item for item in result.scalars().all() if item.steps]
+        if not cases:
+            raise RuntimeError("没有可执行的 Case")
+        return cases
+
+    async def _load_cases_by_ids(self, db: AsyncSession, case_ids: list[int]) -> list[Case]:
+        result = await db.execute(
+            select(Case).options(selectinload(Case.steps)).where(Case.id.in_(case_ids))
+        )
+        by_id = {item.id: item for item in result.scalars().all()}
+        ordered: list[Case] = []
+        for case_id in case_ids:
+            case = by_id.get(case_id)
+            if not case:
+                raise RuntimeError(f"Case #{case_id} 不存在")
+            if not case.steps:
+                raise RuntimeError(f"Case #{case_id} 没有可执行步骤")
+            ordered.append(case)
+        return ordered
 
     async def _load_case(self, case_id: int, db: AsyncSession) -> Case:
         result = await db.execute(

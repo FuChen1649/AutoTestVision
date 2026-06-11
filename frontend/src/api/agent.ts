@@ -3,6 +3,9 @@ import { readApiResponse } from "./http";
 import type {
   AgentLogItem,
   AgentRunState,
+  BatchListItem,
+  BatchState,
+  BatchStreamEvent,
   CaseListItem,
   DeviceReplayStreamEvent,
   ProvidersResponse,
@@ -44,16 +47,16 @@ export const agentApi = {
     return response.ok;
   },
 
-  listCases: async (limit = 10): Promise<CaseListItem[]> => {
+  listCases: async (limit?: number): Promise<CaseListItem[]> => {
     const cases = await api.listCases();
-    return cases
+    const sorted = cases
       .sort((a, b) => {
         const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
         const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
         return bTime - aTime;
       })
-      .slice(0, limit)
       .map(toCaseListItem);
+    return limit ? sorted.slice(0, limit) : sorted;
   },
 
   listProviders: () => request<ProvidersResponse>("/providers"),
@@ -82,6 +85,9 @@ export const agentApi = {
 
   cancelRun: (runId: string) => request<void>(`/runs/${runId}`, { method: "DELETE" }),
 
+  cancelBatch: (batchId: string) =>
+    request<BatchState>(`/batches/${batchId}`, { method: "DELETE" }),
+
   streamRun: (
     runId: string,
     handlers: {
@@ -108,6 +114,53 @@ export const agentApi = {
     source.onerror = () => {
       source.close();
       handlers.onError?.(new Error("Agent 执行流连接中断，请确认后端已重启"));
+      handlers.onDone?.();
+    };
+
+    return () => source.close();
+  },
+
+  startBatch: (llmProvider?: string | null, options?: { enableVerifier?: boolean }) =>
+    request<BatchState>("/batches", {
+      method: "POST",
+      body: JSON.stringify({
+        case_ids: [],
+        enable_verifier: options?.enableVerifier ?? false,
+        ...(llmProvider ? { llm_provider: llmProvider } : {}),
+      }),
+    }),
+
+  listBatches: (limit = 50) =>
+    request<BatchListItem[]>(`/batches?limit=${encodeURIComponent(String(limit))}`),
+
+  getBatch: (batchId: string) => request<BatchState>(`/batches/${batchId}`),
+
+  streamBatch: (
+    batchId: string,
+    handlers: {
+      onEvent: (event: BatchStreamEvent) => void;
+      onError?: (error: Error) => void;
+      onDone?: () => void;
+    }
+  ) => {
+    const source = new EventSource(`${API_BASE}/batches/${batchId}/stream`);
+
+    source.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data) as BatchStreamEvent;
+        handlers.onEvent(event);
+        if (event.type === "done" || event.type === "error") {
+          source.close();
+          handlers.onDone?.();
+        }
+      } catch (error) {
+        handlers.onError?.(error instanceof Error ? error : new Error("批量流数据解析失败"));
+      }
+    };
+
+    source.onerror = () => {
+      source.close();
+      handlers.onError?.(new Error("批量执行流连接中断，请确认后端已重启"));
       handlers.onDone?.();
     };
 

@@ -2,6 +2,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -9,13 +10,23 @@ from sqlalchemy.orm import selectinload
 from app.agent_test_service.schemas import (
     ActionIntent,
     AgentLogItem,
+    BatchListItem,
+    BatchResultItem,
+    BatchStateResponse,
     RunStateResponse,
     StepAttemptRecord,
     StepExecutionRecord,
     VerificationResult,
 )
 from app.agent_test_service.tools import parse_step_metadata
-from app.models.agent import AgentLog, AgentRun, AgentRunStep, AgentRunStepAttempt
+from app.models.agent import (
+    AgentBatchResult,
+    AgentBatchRun,
+    AgentLog,
+    AgentRun,
+    AgentRunStep,
+    AgentRunStepAttempt,
+)
 from app.models.case import Case
 
 
@@ -28,9 +39,12 @@ class AgentRepository:
         max_retries: int,
         llm_provider: str | None = None,
         enable_verifier: bool = False,
+        batch_id: int | None = None,
+        auto_commit: bool = True,
     ) -> AgentRun:
         run = AgentRun(
             run_uuid=str(uuid.uuid4()),
+            batch_id=batch_id,
             source_case_id=case.id,
             case_name=case.name,
             serial=serial,
@@ -58,8 +72,11 @@ class AgentRepository:
                 )
             )
         db.add(run)
-        await db.commit()
-        await db.refresh(run, attribute_names=["steps", "logs"])
+        if auto_commit:
+            await db.commit()
+        else:
+            await db.flush()
+        await db.refresh(run, attribute_names=["steps", "logs", "attempts"])
         return run
 
     async def get_run_by_uuid(self, db: AsyncSession, run_uuid: str) -> AgentRun | None:
@@ -91,7 +108,8 @@ class AgentRepository:
             detail_json=json.dumps(detail, ensure_ascii=False) if detail else None,
         )
         db.add(log)
-        run.logs.append(log)
+        if "logs" not in sa_inspect(run).unloaded:
+            run.logs.append(log)
         await db.flush()
         return log
 
@@ -170,8 +188,14 @@ class AgentRepository:
         metadata = parse_step_metadata(step.metadata_json)
         return step.step_type, intent, metadata or None
 
+    def _loaded_relationship(self, obj: object, name: str) -> list:
+        state = sa_inspect(obj)
+        if state is None or name in state.unloaded:
+            return []
+        return list(getattr(obj, name))
+
     def _attempts_to_records(self, run: AgentRun) -> list[StepAttemptRecord]:
-        step_by_order = {item.step_order: item for item in run.steps}
+        step_by_order = {item.step_order: item for item in self._loaded_relationship(run, "steps")}
 
         def enrich(item: AgentRunStepAttempt) -> StepAttemptRecord:
             step = step_by_order.get(item.step_order)
@@ -193,13 +217,16 @@ class AgentRepository:
 
         records = [
             enrich(item)
-            for item in sorted(run.attempts, key=lambda row: (row.step_order, row.attempt_index))
+            for item in sorted(
+                self._loaded_relationship(run, "attempts"),
+                key=lambda row: (row.step_order, row.attempt_index),
+            )
         ]
         if records:
             return records
 
         fallback: list[StepAttemptRecord] = []
-        for step in sorted(run.steps, key=lambda item: item.step_order):
+        for step in sorted(self._loaded_relationship(run, "steps"), key=lambda item: item.step_order):
             if not (step.before_image or step.before_image_annotated or step.after_image):
                 continue
             step_type, intent, metadata = self._step_action_context(step)
@@ -222,7 +249,7 @@ class AgentRepository:
 
     def to_response(self, run: AgentRun) -> RunStateResponse:
         steps: list[StepExecutionRecord] = []
-        for step in sorted(run.steps, key=lambda item: item.step_order):
+        for step in sorted(self._loaded_relationship(run, "steps"), key=lambda item: item.step_order):
             intent = None
             verification = None
             if step.intent_json:
@@ -267,6 +294,131 @@ class AgentRepository:
             attempts=self._attempts_to_records(run),
             created_at=run.created_at,
             updated_at=run.updated_at,
+        )
+
+    async def create_batch(
+        self,
+        db: AsyncSession,
+        serial: str | None,
+        total_cases: int,
+        case_ids: list[int],
+        llm_provider: str | None = None,
+        enable_verifier: bool = False,
+    ) -> AgentBatchRun:
+        batch = AgentBatchRun(
+            batch_uuid=str(uuid.uuid4()),
+            status="pending",
+            serial=serial,
+            llm_provider=llm_provider,
+            enable_verifier=enable_verifier,
+            total_cases=total_cases,
+            case_ids_json=json.dumps(case_ids, ensure_ascii=False),
+        )
+        db.add(batch)
+        await db.commit()
+        await db.refresh(batch, attribute_names=["results"])
+        return batch
+
+    async def get_batch_by_uuid(self, db: AsyncSession, batch_uuid: str) -> AgentBatchRun | None:
+        result = await db.execute(
+            select(AgentBatchRun)
+            .options(selectinload(AgentBatchRun.results))
+            .where(AgentBatchRun.batch_uuid == batch_uuid)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_batches(self, db: AsyncSession, limit: int = 50) -> list[AgentBatchRun]:
+        result = await db.execute(
+            select(AgentBatchRun).order_by(AgentBatchRun.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def update_batch_fields(self, db: AsyncSession, batch: AgentBatchRun, **fields) -> AgentBatchRun:
+        for key, value in fields.items():
+            setattr(batch, key, value)
+        batch.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        return batch
+
+    async def create_batch_result(
+        self,
+        db: AsyncSession,
+        batch: AgentBatchRun,
+        run: AgentRun,
+        case_order: int,
+    ) -> AgentBatchResult:
+        for item in self._loaded_relationship(batch, "results"):
+            if item.case_order == case_order:
+                return item
+
+        passed_steps = sum(
+            1 for step in self._loaded_relationship(run, "steps") if step.status == "success"
+        )
+        result = AgentBatchResult(
+            batch_id=batch.id,
+            run_id=run.id,
+            run_uuid=run.run_uuid,
+            case_id=run.source_case_id,
+            case_name=run.case_name,
+            case_order=case_order,
+            status=run.status,
+            total_steps=run.total_steps,
+            passed_steps=passed_steps,
+            error=run.error,
+        )
+        db.add(result)
+        if "results" not in sa_inspect(batch).unloaded:
+            batch.results.append(result)
+        await db.flush()
+        return result
+
+    def batch_result_to_item(self, result: AgentBatchResult) -> BatchResultItem:
+        return BatchResultItem(
+            result_id=result.id,
+            run_id=result.run_uuid,
+            case_id=result.case_id,
+            case_name=result.case_name,
+            case_order=result.case_order,
+            status=result.status,
+            total_steps=result.total_steps,
+            passed_steps=result.passed_steps,
+            error=result.error,
+            created_at=result.created_at,
+            updated_at=result.updated_at,
+        )
+
+    def to_batch_response(self, batch: AgentBatchRun) -> BatchStateResponse:
+        results = [
+            self.batch_result_to_item(item)
+            for item in sorted(self._loaded_relationship(batch, "results"), key=lambda row: row.case_order)
+        ]
+        return BatchStateResponse(
+            batch_id=batch.batch_uuid,
+            status=batch.status,  # type: ignore[arg-type]
+            serial=batch.serial,
+            llm_provider=batch.llm_provider,
+            enable_verifier=bool(batch.enable_verifier),
+            total_cases=batch.total_cases,
+            completed_cases=batch.completed_cases,
+            passed_cases=batch.passed_cases,
+            failed_cases=batch.failed_cases,
+            error=batch.error,
+            results=results,
+            created_at=batch.created_at,
+            updated_at=batch.updated_at,
+        )
+
+    def to_batch_list_item(self, batch: AgentBatchRun) -> BatchListItem:
+        return BatchListItem(
+            batch_id=batch.batch_uuid,
+            status=batch.status,  # type: ignore[arg-type]
+            total_cases=batch.total_cases,
+            completed_cases=batch.completed_cases,
+            passed_cases=batch.passed_cases,
+            failed_cases=batch.failed_cases,
+            llm_provider=batch.llm_provider,
+            created_at=batch.created_at,
+            updated_at=batch.updated_at,
         )
 
     def logs_to_items(self, run: AgentRun, agent_type: str | None = None) -> list[AgentLogItem]:

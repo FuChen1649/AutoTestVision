@@ -7,10 +7,13 @@ from app.agent_test_service.schemas import (
     ActionIntent,
     AgentLogsResponse,
     AnalyzeIntentRequest,
+    BatchListItem,
+    BatchStateResponse,
     CaseListItem,
     DeviceReplayStreamEvent,
     ProvidersResponse,
     RunStateResponse,
+    StartBatchRequest,
     StartRunRequest,
     StepAdvanceResponse,
 )
@@ -130,3 +133,56 @@ async def cancel_run(run_id: str, db: AsyncSession = Depends(get_db)) -> None:
     cancelled = await agent_test_service.cancel_run(run_id, db)
     if not cancelled:
         raise HTTPException(status_code=404, detail="运行实例不存在")
+
+
+@router.post("/batches", response_model=BatchStateResponse, status_code=201)
+async def start_batch(
+    payload: StartBatchRequest, db: AsyncSession = Depends(get_db)
+) -> BatchStateResponse:
+    logger.info("[api] POST /agent-test/batches")
+    try:
+        return await agent_test_service.start_batch(payload, db)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/batches", response_model=list[BatchListItem])
+async def list_batches(
+    limit: int = Query(default=50, ge=1, le=200), db: AsyncSession = Depends(get_db)
+) -> list[BatchListItem]:
+    return await agent_test_service.list_batches(db, limit=limit)
+
+
+@router.get("/batches/{batch_id}", response_model=BatchStateResponse)
+async def get_batch(batch_id: str, db: AsyncSession = Depends(get_db)) -> BatchStateResponse:
+    batch = await agent_test_service.get_batch(batch_id, db)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return batch
+
+
+@router.delete("/batches/{batch_id}", response_model=BatchStateResponse)
+async def cancel_batch(
+    batch_id: str, db: AsyncSession = Depends(get_db)
+) -> BatchStateResponse:
+    batch = await agent_test_service.cancel_batch(batch_id, db)
+    if not batch:
+        raise HTTPException(status_code=404, detail="批量任务不存在")
+    return batch
+
+
+@router.get("/batches/{batch_id}/stream")
+async def stream_batch(batch_id: str) -> StreamingResponse:
+    logger.info("[api] GET /agent-test/batches/%s/stream", batch_id)
+    try:
+        return StreamingResponse(
+            agent_test_service.stream_batch(batch_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

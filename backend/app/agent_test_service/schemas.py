@@ -153,3 +153,62 @@ class DeviceReplayStreamEvent(BaseModel):
     step_index: int | None = None
     total_steps: int | None = None
     action: str | None = None
+
+
+class StartBatchRequest(BaseModel):
+    case_ids: list[int] = Field(default_factory=list)
+    serial: str | None = None
+    max_retries: int = Field(default=1, ge=0, le=3)
+    llm_provider: str | None = None
+    enable_verifier: bool = False
+
+
+class BatchResultItem(BaseModel):
+    result_id: int
+    run_id: str
+    case_id: int
+    case_name: str
+    case_order: int
+    status: str
+    total_steps: int
+    passed_steps: int
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BatchStateResponse(BaseModel):
+    batch_id: str
+    status: RunStatus
+    serial: str | None
+    llm_provider: str | None = None
+    enable_verifier: bool = False
+    total_cases: int
+    completed_cases: int
+    passed_cases: int
+    failed_cases: int
+    error: str | None = None
+    results: list[BatchResultItem] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class BatchListItem(BaseModel):
+    batch_id: str
+    status: RunStatus
+    total_cases: int
+    completed_cases: int
+    passed_cases: int
+    failed_cases: int
+    llm_provider: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BatchStreamEvent(BaseModel):
+    type: str
+    batch: BatchStateResponse | None = None
+    result: BatchResultItem | None = None
+    run: RunStateResponse | None = None
+    logs: list[AgentLogItem] = Field(default_factory=list)
+    message: str | None = None

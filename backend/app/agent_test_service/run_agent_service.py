@@ -33,8 +33,9 @@ logger = init_agent_logger()
 
 from app.api import agent_test  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.database import Base, engine  # noqa: E402
+from app.database import Base, async_session, engine  # noqa: E402
 from app.models import agent as _agent_models  # noqa: E402, F401
+from app.agent_test_service.startup_recovery import recover_stale_agent_tasks  # noqa: E402
 from app.services.adb import adb_service  # noqa: E402
 
 
@@ -83,6 +84,8 @@ async def run_startup_checks(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with async_session() as db:
+        await recover_stale_agent_tasks(db)
     await run_startup_checks(app)
     yield
     await engine.dispose()

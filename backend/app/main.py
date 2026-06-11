@@ -6,8 +6,9 @@ from sqlalchemy import text
 
 from app.api import agent_test, cases, device
 from app.config import settings
-from app.database import Base, engine
+from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
+from app.agent_test_service.startup_recovery import recover_stale_agent_tasks
 
 
 @asynccontextmanager
@@ -29,8 +30,12 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS metadata_json TEXT",
             "ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS metadata_json TEXT",
             "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS enable_verifier BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS batch_id INTEGER",
+            "ALTER TABLE agent_batch_runs ADD COLUMN IF NOT EXISTS case_ids_json TEXT",
         ):
             await conn.execute(text(ddl))
+    async with async_session() as db:
+        await recover_stale_agent_tasks(db)
     yield
     await engine.dispose()
 

@@ -2,12 +2,14 @@ import { useState } from "react";
 import AppNav from "./components/AppNav";
 import AgentTestPage from "./pages/AgentTestPage";
 import CaseBuilderPage from "./pages/CaseBuilderPage";
+import ResultPage from "./pages/ResultPage";
 import { NAV_ITEMS, type AppPageId } from "./types/navigation";
 import "./App.css";
 
 const PAGE_SUBTITLES: Record<AppPageId, string> = {
   "case-builder": "Stage 1 · Case 构建",
   "agent-test": "Agent 测试执行",
+  result: "批量执行结果",
 };
 
 export default function App() {
@@ -51,6 +53,7 @@ export default function App() {
       <div className="app-content">
         {activePage === "case-builder" && <CaseBuilderPage onStatusMessage={setStatusMessage} />}
         {activePage === "agent-test" && <AgentTestPage />}
+        {activePage === "result" && <ResultPage />}
       </div>
     </div>
   );
