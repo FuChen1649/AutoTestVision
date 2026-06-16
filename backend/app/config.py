@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # 执行操作后、截取「执行后」图前的等待时间（毫秒）
     agent_after_capture_delay_ms: int = 2000
 
+    # 数据飞轮产物目录（导出 JSONL、RAG、训练 artifact）
+    flywheel_artifact_dir: str = "data/flywheel"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

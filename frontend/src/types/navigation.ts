@@ -31,12 +31,12 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: "data-cleaning",
     label: "数据清洗",
-    description: "数据清洗（建设中）",
+    description: "样本同步、自动清洗与人工标注",
     dividerBefore: true,
   },
   {
     id: "data-flywheel",
     label: "数据飞轮",
-    description: "数据飞轮（建设中）",
+    description: "数据集、RAG、训练与评估",
   },
 ];

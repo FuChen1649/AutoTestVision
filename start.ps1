@@ -32,7 +32,18 @@ Get-NetTCPConnection -LocalPort 8099 -State Listen -ErrorAction SilentlyContinue
 $backendCmd = 'cd /d "' + $Root + '\backend" & .venv\Scripts\python.exe run.py'
 Start-Process cmd.exe -ArgumentList '/k', $backendCmd -WindowStyle Normal
 
-Start-Sleep -Seconds 2
+Write-Host "等待后端就绪（最多 30 秒）..."
+$ready = $false
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+    try {
+        $code = (Invoke-WebRequest -Uri "http://127.0.0.1:8099/api/health" -UseBasicParsing -TimeoutSec 2).StatusCode
+        if ($code -eq 200) { $ready = $true; break }
+    } catch { }
+}
+if (-not $ready) {
+    Write-Host "[警告] 后端未就绪，请查看 AutoTestVision-Backend 窗口中的报错"
+}
 
 Write-Host "[2/2] 启动前端  0.0.0.0:5179 （本机 http://localhost:5179，局域网见前端窗口 Network 地址）"
 Get-NetTCPConnection -LocalPort 5179 -State Listen -ErrorAction SilentlyContinue |

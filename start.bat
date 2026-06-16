@@ -35,7 +35,18 @@ echo [1/2] 启动后端  0.0.0.0:8099 （本机 http://localhost:8099）
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8099" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
 start "AutoTestVision-Backend" cmd /k "cd /d "%~dp0backend" && .venv\Scripts\python.exe run.py"
 
-timeout /t 2 /nobreak >nul
+echo 等待后端就绪（最多 30 秒）...
+set /a _tries=0
+:wait_backend
+timeout /t 1 /nobreak >nul
+powershell -NoProfile -Command "try { exit [int]((Invoke-WebRequest -Uri 'http://127.0.0.1:8099/api/health' -UseBasicParsing -TimeoutSec 2).StatusCode -ne 200) } catch { exit 1 }"
+if %errorlevel%==0 goto backend_ready
+set /a _tries+=1
+if %_tries% lss 30 goto wait_backend
+echo [警告] 后端未就绪，请查看 AutoTestVision-Backend 窗口中的报错
+:backend_ready
+
+timeout /t 1 /nobreak >nul
 
 echo [2/2] 启动前端  0.0.0.0:5179 （本机 http://localhost:5179，局域网见前端窗口 Network 地址）
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5179" ^| findstr "LISTENING"') do taskkill /F /PID %%a >nul 2>&1
