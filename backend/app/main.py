@@ -4,10 +4,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import agent_test, cases, device, flywheel, result_verify
+from app.api import agent_test, agent_test_code, cases, device, flywheel, result_verify
 from app.config import settings
 from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
+from app.models import agent_code as _agent_code_models  # noqa: F401
 from app.models import flywheel as _flywheel_models  # noqa: F401
 from app.agent_test_service.startup_recovery import recover_stale_agent_tasks
 
@@ -56,6 +57,7 @@ app.add_middleware(
 app.include_router(cases.router, prefix="/api")
 app.include_router(device.router, prefix="/api")
 app.include_router(agent_test.router, prefix="/api")
+app.include_router(agent_test_code.router, prefix="/api")
 app.include_router(result_verify.router, prefix="/api")
 app.include_router(flywheel.router, prefix="/api")
 

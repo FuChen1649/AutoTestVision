@@ -1,6 +1,7 @@
 export type AppPageId =
   | "case-builder"
-  | "agent-test"
+  | "agent-test-position"
+  | "agent-test-code"
   | "result"
   | "data-cleaning"
   | "data-flywheel";
@@ -19,9 +20,14 @@ export const NAV_ITEMS: NavItem[] = [
     description: "构建与保存自然语言描述的测试 Case",
   },
   {
-    id: "agent-test",
-    label: "AgentTest",
-    description: "Agent 测试与执行",
+    id: "agent-test-position",
+    label: "AgentTest_Position",
+    description: "坐标意图分析 + 触控执行",
+  },
+  {
+    id: "agent-test-code",
+    label: "AgentTest_Code",
+    description: "代码意图分析 + uiautomator2/pytest 执行",
   },
   {
     id: "result",

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import AppNav from "./components/AppNav";
+import AgentTestCodePage from "./pages/AgentTestCodePage";
 import AgentTestPage from "./pages/AgentTestPage";
 import CaseBuilderPage from "./pages/CaseBuilderPage";
 import DataCleaningPage from "./pages/DataCleaningPage";
@@ -10,7 +11,8 @@ import "./App.css";
 
 const PAGE_SUBTITLES: Record<AppPageId, string> = {
   "case-builder": "Stage 1 · Case 构建",
-  "agent-test": "Agent 测试执行",
+  "agent-test-position": "坐标意图 · 触控执行",
+  "agent-test-code": "代码意图 · pytest 执行",
   result: "批量执行结果",
   "data-cleaning": "数据清洗",
   "data-flywheel": "数据飞轮",
@@ -56,7 +58,8 @@ export default function App() {
 
       <div className="app-content">
         {activePage === "case-builder" && <CaseBuilderPage onStatusMessage={setStatusMessage} />}
-        {activePage === "agent-test" && <AgentTestPage />}
+        {activePage === "agent-test-position" && <AgentTestPage />}
+        {activePage === "agent-test-code" && <AgentTestCodePage />}
         {activePage === "result" && <ResultPage />}
         {activePage === "data-cleaning" && <DataCleaningPage />}
         {activePage === "data-flywheel" && <DataFlywheelPage />}

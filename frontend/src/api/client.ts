@@ -28,6 +28,8 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  deleteCase: (id: number) => request<void>(`/cases/${id}`, { method: "DELETE" }),
+
   listDevices: () => request<DeviceInfo[]>("/device/list"),
 
   selectDevice: (serial: string) =>

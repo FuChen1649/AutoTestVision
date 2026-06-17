@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # 数据飞轮产物目录（导出 JSONL、RAG、训练 artifact）
     flywheel_artifact_dir: str = "data/flywheel"
 
+    # AgentTest_Code：pytest 工作区（默认在项目根 .runtime/，避免 uvicorn reload 监视 backend/data）
+    agent_code_workspace_dir: str = "../.runtime/agent_code_runs"
+    agent_code_pytest_timeout_sec: int = 120
+    # 默认进程内执行 u2；设为 true 时成功后再跑 pytest 子进程（可能与 ADB 争用）
+    agent_code_run_pytest_subprocess: bool = False
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

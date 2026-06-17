@@ -71,6 +71,34 @@ export default function AgentTestPage() {
     }
   }, []);
 
+  const handleDeleteCase = async (caseItem: CaseListItem) => {
+    if (running || batchRunning) {
+      return;
+    }
+    const confirmed = window.confirm(`确定删除 Case「${caseItem.name}」？此操作不可恢复。`);
+    if (!confirmed) {
+      return;
+    }
+    setError(null);
+    try {
+      await agentApi.deleteCase(caseItem.id);
+      const list = await agentApi.listCases(10);
+      setCases(list);
+      if (selectedCaseId === caseItem.id) {
+        setSelectedCaseId(list[0]?.id ?? null);
+      }
+      if (run?.case_id === caseItem.id) {
+        stopStreamRef.current?.();
+        stopStreamRef.current = null;
+        setRun(null);
+        setIntentLogs([]);
+        setVerifierLogs([]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除 Case 失败");
+    }
+  };
+
   const loadProviders = useCallback(async () => {
     try {
       const resp = await agentApi.listProviders();
@@ -281,7 +309,7 @@ export default function AgentTestPage() {
     <section className="agent-test-page">
       <header className="agent-test-toolbar">
         <div className="agent-test-toolbar-left">
-          <span className="agent-test-toolbar-title">Agent 测试执行</span>
+          <span className="agent-test-toolbar-title">AgentTest_Position</span>
           {batchRunning && batch && (
             <span className="agent-test-run-badge">
               批量执行 · {batch.completed_cases}/{batch.total_cases} · {batch.status}
@@ -378,16 +406,27 @@ export default function AgentTestPage() {
                     key={item.id}
                     className={isSelected ? "agent-case-block agent-case-block-active" : "agent-case-block"}
                   >
-                    <button
-                      type="button"
-                      className={isSelected ? "agent-case-item agent-case-item-active" : "agent-case-item"}
-                      onClick={() => setSelectedCaseId(item.id)}
-                    >
-                      <strong>{item.name}</strong>
-                      <span>
-                        #{item.id} · {item.step_count} 步
-                      </span>
-                    </button>
+                    <div className="agent-case-item-row">
+                      <button
+                        type="button"
+                        className={isSelected ? "agent-case-item agent-case-item-active" : "agent-case-item"}
+                        onClick={() => setSelectedCaseId(item.id)}
+                      >
+                        <strong>{item.name}</strong>
+                        <span>
+                          #{item.id} · {item.step_count} 步
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="agent-case-delete-btn"
+                        title="删除 Case"
+                        disabled={running || batchRunning}
+                        onClick={() => void handleDeleteCase(item)}
+                      >
+                        删除
+                      </button>
+                    </div>
                     {isSelected && item.steps.length > 0 && (
                       <ol className="agent-case-steps">
                         {item.steps.map((step) => {

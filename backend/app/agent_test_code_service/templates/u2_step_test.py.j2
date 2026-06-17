@@ -1,0 +1,8 @@
+"""Auto-generated uiautomator2 step test for AutoTestVision AgentTest_Code."""
+import uiautomator2 as u2
+
+
+def test_step_{{ step_order }}():
+    """Step {{ step_order + 1 }}: {{ description | replace('"', '\\"') }}"""
+    d = u2.connect("{{ serial }}")
+    {{ code_line | indent(4) }}

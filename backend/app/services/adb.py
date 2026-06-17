@@ -137,6 +137,35 @@ class AdbService:
             raise RuntimeError("未连接设备")
         return self._get_screen_size(target)
 
+    def dump_ui_hierarchy(self, serial: str | None = None, *, max_chars: int = 120_000) -> str:
+        """uiautomator dump 当前界面 XML（带重试）。"""
+        target = self._resolve_serial(serial)
+        dump_path = "/sdcard/autotest_ui_dump.xml"
+        last_error = ""
+        for attempt in range(3):
+            if attempt:
+                time.sleep(0.5 * attempt)
+            dump_result = self._run(
+                "shell", "uiautomator", "dump", dump_path, serial=target, timeout=25
+            )
+            if dump_result.returncode == 0:
+                cat_result = self._run("shell", "cat", dump_path, serial=target, timeout=15)
+                if cat_result.returncode == 0 and cat_result.stdout:
+                    xml = cat_result.stdout.decode("utf-8", errors="ignore")
+                    if len(xml) > 50:
+                        if len(xml) > max_chars:
+                            return xml[:max_chars] + "\n<!-- truncated -->"
+                        return xml
+                last_error = "读取 UI dump 失败"
+            else:
+                stderr = dump_result.stderr.decode(errors="ignore").strip()
+                stdout = dump_result.stdout.decode(errors="ignore").strip()
+                last_error = stderr or stdout or f"exit={dump_result.returncode}"
+        raise RuntimeError(f"uiautomator dump 失败: {last_error}")
+
+    async def dump_ui_hierarchy_async(self, serial: str | None = None, *, max_chars: int = 120_000) -> str:
+        return await asyncio.to_thread(self.dump_ui_hierarchy, serial, max_chars=max_chars)
+
     def set_active_device(self, serial: str) -> None:
         self._active_serial = serial
 

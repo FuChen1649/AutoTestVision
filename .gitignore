@@ -1,6 +1,7 @@
 # Python
 backend/logs/
 backend/data/
+.runtime/
 __pycache__/
 *.py[cod]
 .venv/

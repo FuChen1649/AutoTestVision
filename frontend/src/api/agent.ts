@@ -1,3 +1,4 @@
+import { sortCasesByUpdatedAt, toCaseListItem } from "./caseHelpers";
 import { api } from "./client";
 import { readApiResponse } from "./http";
 import type {
@@ -11,25 +12,6 @@ import type {
   ProvidersResponse,
   StreamEvent,
 } from "../types/agent";
-
-function toCaseListItem(
-  item: Awaited<ReturnType<typeof api.listCases>>[number]
-): CaseListItem {
-  const steps = [...(item.steps ?? [])]
-    .sort((a, b) => a.step_order - b.step_order)
-    .map((step) => ({
-      step_order: step.step_order,
-      step_type: step.step_type,
-      description: step.description,
-    }));
-  return {
-    id: item.id!,
-    name: item.name,
-    step_count: steps.length,
-    updated_at: item.updated_at ?? new Date().toISOString(),
-    steps,
-  };
-}
 
 const API_BASE = "/api/agent-test";
 
@@ -48,16 +30,11 @@ export const agentApi = {
   },
 
   listCases: async (limit?: number): Promise<CaseListItem[]> => {
-    const cases = await api.listCases();
-    const sorted = cases
-      .sort((a, b) => {
-        const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-        const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
-        return bTime - aTime;
-      })
-      .map(toCaseListItem);
-    return limit ? sorted.slice(0, limit) : sorted;
+    const cases = sortCasesByUpdatedAt((await api.listCases()).map(toCaseListItem));
+    return limit ? cases.slice(0, limit) : cases;
   },
+
+  deleteCase: (caseId: number) => api.deleteCase(caseId),
 
   listProviders: () => request<ProvidersResponse>("/providers"),
 

@@ -142,7 +142,8 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
     setCaseId(initial.caseId);
     setCaseName(initial.caseName);
     setSteps(initial.steps);
-    onStatusMessage(`已保存 Case #${savedCaseId}，操作区已清空，可开始编写新 Case`);
+    setScriptContent("");
+    onStatusMessage(`已保存 Case #${savedCaseId}（含原始脚本），操作区已清空，可开始编写新 Case`);
   };
 
   const handleStepChange = (index: number, description: string) => {
