@@ -2,6 +2,7 @@ export type AppPageId =
   | "case-builder"
   | "agent-test-position"
   | "agent-test-code"
+  | "agent-monkey-test"
   | "result"
   | "data-cleaning"
   | "data-flywheel";
@@ -28,6 +29,11 @@ export const NAV_ITEMS: NavItem[] = [
     id: "agent-test-code",
     label: "AgentTest_Code",
     description: "代码意图分析 + uiautomator2/pytest 执行",
+  },
+  {
+    id: "agent-monkey-test",
+    label: "AgentMonkeyTest",
+    description: "应用探索 · 树形导航与坐标回放",
   },
   {
     id: "result",

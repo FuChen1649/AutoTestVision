@@ -9,7 +9,10 @@ interface DeviceScreenProps {
   deviceLoading?: boolean;
   onRefreshDevices?: () => void;
   onSelectDevice: (serial: string) => void;
-  onPermissionPresetAdded: () => void;
+  onPermissionPresetAdded: (payload: { package: string; permissions: string[] }) => void;
+  readOnly?: boolean;
+  highlightCenter?: { x: number; y: number } | null;
+  highlightBBox?: { x: number; y: number; w: number; h: number } | null;
 }
 
 interface ViewportSize {
@@ -43,6 +46,9 @@ export default function DeviceScreen({
   onRefreshDevices,
   onSelectDevice,
   onPermissionPresetAdded,
+  readOnly = false,
+  highlightCenter = null,
+  highlightBBox = null,
 }: DeviceScreenProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -126,6 +132,34 @@ export default function DeviceScreen({
     deviceSizeRef.current = { width: frame.width, height: frame.height };
     displayRectRef.current = { offsetX, offsetY, width: displayWidth, height: displayHeight };
 
+    const scaleX = displayWidth / frame.width;
+    const scaleY = displayHeight / frame.height;
+
+    if (highlightBBox) {
+      ctx.strokeStyle = "rgba(250, 204, 21, 0.95)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(
+        offsetX + highlightBBox.x * scaleX,
+        offsetY + highlightBBox.y * scaleY,
+        highlightBBox.w * scaleX,
+        highlightBBox.h * scaleY
+      );
+    }
+
+    if (highlightCenter) {
+      const cx = offsetX + highlightCenter.x * scaleX;
+      const cy = offsetY + highlightCenter.y * scaleY;
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(34, 197, 94, 0.35)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     const pointer = pointerRef.current;
     const dragPoint = dragTo ?? dragCurrentRef.current;
     if (pointer && dragPoint) {
@@ -170,7 +204,7 @@ export default function DeviceScreen({
         ctx.fill();
       }
     }
-  }, []);
+  }, [highlightBBox, highlightCenter]);
 
   const paintCanvas = useCallback(
     (dragTo?: { x: number; y: number } | null) => {
@@ -221,7 +255,7 @@ export default function DeviceScreen({
 
   useEffect(() => {
     paintCanvas();
-  }, [viewportSize, paintCanvas]);
+  }, [viewportSize, paintCanvas, highlightCenter, highlightBBox]);
 
   useEffect(() => {
     if (!selectedSerial) {
@@ -432,9 +466,11 @@ export default function DeviceScreen({
         <div className="device-header-title">
           <h2>设备屏幕</h2>
           <span className="panel-hint">
-            {connected
-              ? "单击=点击，按住=长按，拖拽=滑动"
-              : "请连接 Android 设备并开启 USB 调试"}
+            {readOnly
+              ? "探索进行中，屏幕只读"
+              : connected
+                ? "单击=点击，按住=长按，拖拽=滑动"
+                : "请连接 Android 设备并开启 USB 调试"}
           </span>
         </div>
 
@@ -466,10 +502,11 @@ export default function DeviceScreen({
           <canvas
             ref={canvasRef}
             className="device-canvas"
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerCancel}
+            onPointerDown={readOnly ? undefined : handlePointerDown}
+            onPointerMove={readOnly ? undefined : handlePointerMove}
+            onPointerUp={readOnly ? undefined : handlePointerUp}
+            onPointerCancel={readOnly ? undefined : handlePointerCancel}
+            style={readOnly ? { cursor: "default" } : undefined}
           />
           {!selectedSerial && (
             <div className="device-placeholder">

@@ -199,6 +199,23 @@ class AdbService:
         "com.miui.home/.launcher.Launcher",
     )
 
+    def press_back_key(
+        self, serial: str | None = None, *, times: int = 1, interval_sec: float = 0.35
+    ) -> int:
+        """发送 Android BACK 键（KEYCODE_BACK=4）。"""
+        if times < 1:
+            return 0
+        target = self._resolve_serial(serial)
+        sent = 0
+        for index in range(times):
+            result = self._run("shell", "input", "keyevent", "4", serial=target, timeout=5)
+            if result.returncode == 0:
+                sent += 1
+            if index < times - 1:
+                time.sleep(interval_sec)
+        logger.info("[adb] 已发送 BACK 键 serial=%s times=%d", target, sent)
+        return sent
+
     def press_home_key(
         self, serial: str | None = None, *, times: int = 1, interval_sec: float = 0.35
     ) -> int:

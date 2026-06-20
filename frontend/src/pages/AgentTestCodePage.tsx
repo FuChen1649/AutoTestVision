@@ -209,8 +209,6 @@ export default function AgentTestCodePage() {
     }
   };
 
-  const activeStep = focusStep;
-
   return (
     <section className="agent-test-page">
       <header className="agent-test-toolbar">
