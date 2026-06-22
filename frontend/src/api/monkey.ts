@@ -1,6 +1,7 @@
 import { readApiResponse } from "./http";
 import type {
   CreateMonkeySessionPayload,
+  MonkeyExploreState,
   MonkeyProvidersResponse,
   MonkeySession,
   MonkeyStreamEvent,
@@ -32,6 +33,9 @@ export const monkeyApi = {
   getSession: (sessionUuid: string) => request<MonkeySession>(`/sessions/${sessionUuid}`),
 
   getTree: (sessionUuid: string) => request<MonkeyTree>(`/sessions/${sessionUuid}/tree`),
+
+  getExploreState: (sessionUuid: string) =>
+    request<MonkeyExploreState>(`/sessions/${sessionUuid}/state`),
 
   stopSession: (sessionUuid: string) =>
     request<void>(`/sessions/${sessionUuid}/stop`, { method: "POST" }),

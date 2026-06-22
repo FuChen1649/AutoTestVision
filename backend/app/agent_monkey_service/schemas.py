@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 NodeType = Literal["root", "screen", "app", "element", "container"]
-NodeStatus = Literal["discovered", "explored", "skipped", "failed"]
+NodeStatus = Literal["discovered", "explored", "exploring", "skipped", "failed"]
 SessionStatus = Literal["idle", "running", "stopped", "completed", "failed"]
 
 
@@ -18,6 +18,26 @@ class BBox(BaseModel):
 class Center(BaseModel):
     x: int
     y: int
+
+
+ActionStatus = Literal["pending", "executed", "failed", "skipped"]
+
+
+class MonkeyScreenActionResponse(BaseModel):
+    action_uuid: str
+    screen_node_uuid: str
+    action_no: int
+    element_title: str
+    action_type: str
+    bbox: BBox | None = None
+    center: Center | None = None
+    data_dependency: str | None = None
+    status: ActionStatus
+    result_screen_uuid: str | None = None
+    element_node_uuid: str | None = None
+    step_index: int | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class MonkeyNodeResponse(BaseModel):
@@ -70,9 +90,19 @@ class MonkeySessionResponse(BaseModel):
     max_steps: int
     max_depth: int
     current_node_uuid: str | None = None
+    focus_screen_uuid: str | None = None
     error: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class MonkeyExploreStateResponse(BaseModel):
+    session_uuid: str
+    session: MonkeySessionResponse
+    screens: list[MonkeyNodeResponse] = Field(default_factory=list)
+    tree_nodes: list[MonkeyNodeResponse] = Field(default_factory=list)
+    actions: list[MonkeyScreenActionResponse] = Field(default_factory=list)
+    logs: list[MonkeyLogItem] = Field(default_factory=list)
 
 
 class MonkeyTreeResponse(BaseModel):
@@ -92,6 +122,8 @@ class MonkeyStreamEvent(BaseModel):
     type: str
     session: MonkeySessionResponse | None = None
     nodes: list[MonkeyNodeResponse] = Field(default_factory=list)
+    actions: list[MonkeyScreenActionResponse] = Field(default_factory=list)
+    screens: list[MonkeyNodeResponse] = Field(default_factory=list)
     logs: list[MonkeyLogItem] = Field(default_factory=list)
     message: str | None = None
 

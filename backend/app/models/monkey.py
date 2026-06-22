@@ -44,6 +44,12 @@ class MonkeySession(Base):
         cascade="all, delete-orphan",
         order_by="MonkeyActionRecord.step_index",
     )
+    screen_actions: Mapped[list["MonkeyScreenAction"]] = relationship(
+        "MonkeyScreenAction",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="MonkeyScreenAction.screen_node_uuid,MonkeyScreenAction.action_no",
+    )
 
 
 class MonkeyNode(Base):
@@ -111,3 +117,34 @@ class MonkeyActionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     session: Mapped["MonkeySession"] = relationship("MonkeySession", back_populates="actions")
+
+
+class MonkeyScreenAction(Base):
+    """屏幕上的编号操作（1/2/3…），用于迷宫式探索与路径回放。"""
+
+    __tablename__ = "monkey_screen_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    action_uuid: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("monkey_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    screen_node_uuid: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    action_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    element_title: Mapped[str] = mapped_column(Text, default="")
+    action_type: Mapped[str] = mapped_column(Text, default="tap")
+    bbox_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    center_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    swipe_to_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data_dependency: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, default="pending")
+    result_screen_uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    element_node_uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    replay_script_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    step_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    session: Mapped["MonkeySession"] = relationship("MonkeySession", back_populates="screen_actions")

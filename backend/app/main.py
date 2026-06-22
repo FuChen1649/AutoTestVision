@@ -36,6 +36,7 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS batch_id INTEGER",
             "ALTER TABLE agent_batch_runs ADD COLUMN IF NOT EXISTS case_ids_json TEXT",
             "ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS purpose_review_json TEXT",
+            "ALTER TABLE monkey_screen_actions ADD COLUMN IF NOT EXISTS element_node_uuid TEXT",
         ):
             await conn.execute(text(ddl))
     async with async_session() as db:

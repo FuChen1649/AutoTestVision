@@ -3,22 +3,43 @@ import { api } from "../api/client";
 import { isApiOfflineError } from "../api/http";
 import { monkeyApi } from "../api/monkey";
 import DeviceScreen from "../components/DeviceScreen";
-import MonkeyExploreTree from "../components/MonkeyExploreTree";
-import MonkeyTreeGraph from "../components/MonkeyTreeGraph";
+import MonkeyScreenPreviewModal from "../components/MonkeyScreenPreviewModal";
+import MonkeyScreenTreeGallery from "../components/MonkeyScreenTreeGallery";
 import type { DeviceInfo } from "../types";
-import type { MonkeyLogItem, MonkeyNode, MonkeyProviderInfo, MonkeySession } from "../types/monkey";
+import type {
+  MonkeyLogItem,
+  MonkeyNode,
+  MonkeyProviderInfo,
+  MonkeyScreenAction,
+  MonkeySession,
+} from "../types/monkey";
 import "./AgentMonkeyTestPage.css";
+
+type CollapseKey = "detail" | "ledger" | "logs";
+
+const GALLERY_ZOOM_MIN = 0.5;
+const GALLERY_ZOOM_MAX = 2;
+const GALLERY_ZOOM_STEP = 0.1;
+
+function clampZoom(value: number) {
+  return Math.min(GALLERY_ZOOM_MAX, Math.max(GALLERY_ZOOM_MIN, Math.round(value * 10) / 10));
+}
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
 }
 
-function mergeNodes(existing: MonkeyNode[], incoming: MonkeyNode[]): MonkeyNode[] {
-  const map = new Map(existing.map((node) => [node.node_uuid, node]));
-  for (const node of incoming) {
-    map.set(node.node_uuid, node);
-  }
-  return Array.from(map.values()).sort((a, b) => a.depth - b.depth || a.title.localeCompare(b.title, "zh-CN"));
+function actionTypeLabel(type: string) {
+  if (type === "long_press") return "长按";
+  if (type === "swipe") return "滑动";
+  return "点击";
+}
+
+function statusLabel(status: string) {
+  if (status === "executed") return "已执行";
+  if (status === "failed") return "失败";
+  if (status === "skipped") return "跳过";
+  return "待执行";
 }
 
 export default function AgentMonkeyTestPage() {
@@ -32,22 +53,56 @@ export default function AgentMonkeyTestPage() {
   const [selectedProvider, setSelectedProvider] = useState("");
   const [targetAppName, setTargetAppName] = useState("");
   const [session, setSession] = useState<MonkeySession | null>(null);
-  const [nodes, setNodes] = useState<MonkeyNode[]>([]);
-  const [selectedNode, setSelectedNode] = useState<MonkeyNode | null>(null);
-  const [showGraph, setShowGraph] = useState(false);
-  const [graphRootUuid, setGraphRootUuid] = useState<string | null>(null);
+  const [screens, setScreens] = useState<MonkeyNode[]>([]);
+  const [treeNodes, setTreeNodes] = useState<MonkeyNode[]>([]);
+  const [actions, setActions] = useState<MonkeyScreenAction[]>([]);
+  const [selectedScreenUuid, setSelectedScreenUuid] = useState<string | null>(null);
   const [logs, setLogs] = useState<MonkeyLogItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<CollapseKey>>(new Set());
+  const [galleryZoom, setGalleryZoom] = useState(1);
+  const [previewScreen, setPreviewScreen] = useState<MonkeyNode | null>(null);
+  const galleryScrollRef = useRef<HTMLDivElement>(null);
 
-  const rootNode = useMemo(() => nodes.find((node) => node.node_type === "root") ?? null, [nodes]);
+  const selectedScreen = useMemo(() => {
+    const found = screens.find((s) => s.node_uuid === selectedScreenUuid);
+    if (found && found.node_type !== "root") return found;
+    return screens.filter((s) => s.node_type !== "root").slice(-1)[0] ?? null;
+  }, [screens, selectedScreenUuid]);
+
+  const screenActions = useMemo(() => {
+    if (!selectedScreen) return [];
+    return actions
+      .filter((a) => a.screen_node_uuid === selectedScreen.node_uuid)
+      .sort((a, b) => a.action_no - b.action_no);
+  }, [actions, selectedScreen]);
+
+  const previewUrl = selectedScreen
+    ? (() => {
+        const raw = selectedScreen.annotated_screenshot_url ?? selectedScreen.screenshot_url ?? null;
+        if (!raw) return null;
+        const sep = raw.includes("?") ? "&" : "?";
+        return `${raw}${sep}t=${encodeURIComponent(selectedScreen.updated_at)}`;
+      })()
+    : null;
+
+  const togglePanel = (key: CollapseKey) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const refreshDevices = useCallback(async () => {
     try {
       const list = await api.listDevices();
       setDevices(list);
       if (list.length > 0) {
-        const nextSerial = selectedSerial && list.some((d) => d.serial === selectedSerial) ? selectedSerial : list[0].serial;
+        const nextSerial =
+          selectedSerial && list.some((d) => d.serial === selectedSerial) ? selectedSerial : list[0].serial;
         setSelectedSerial(nextSerial);
         await api.selectDevice(nextSerial);
       }
@@ -75,10 +130,38 @@ export default function AgentMonkeyTestPage() {
     }
   }, []);
 
-  const reloadTree = useCallback(async (sessionUuid: string) => {
-    const tree = await monkeyApi.getTree(sessionUuid);
-    setNodes(tree.nodes);
-  }, []);
+  const applyExploreState = useCallback(
+    (state: {
+      session: MonkeySession;
+      screens: MonkeyNode[];
+      tree_nodes: MonkeyNode[];
+      actions: MonkeyScreenAction[];
+      logs: MonkeyLogItem[];
+    }) => {
+      setSession(state.session);
+      setScreens(state.screens);
+      setTreeNodes(state.tree_nodes?.length ? state.tree_nodes : state.screens);
+      setActions(state.actions);
+      setLogs(state.logs);
+      setSelectedScreenUuid((current) => {
+        const focus = state.session.focus_screen_uuid ?? state.session.current_node_uuid;
+        if (current && state.screens.some((s) => s.node_uuid === current)) return current;
+        if (focus && state.screens.some((s) => s.node_uuid === focus)) {
+          return focus;
+        }
+        return state.screens.filter((s) => s.node_type !== "root").slice(-1)[0]?.node_uuid ?? null;
+      });
+    },
+    []
+  );
+
+  const reloadState = useCallback(
+    async (sessionUuid: string) => {
+      const state = await monkeyApi.getExploreState(sessionUuid);
+      applyExploreState(state);
+    },
+    [applyExploreState]
+  );
 
   useEffect(() => {
     void refreshDevices();
@@ -91,16 +174,32 @@ export default function AgentMonkeyTestPage() {
     await api.selectDevice(serial);
   };
 
+  const handleSelectScreen = (node: MonkeyNode) => {
+    if (node.node_type === "root") return;
+    setSelectedScreenUuid(node.node_uuid);
+  };
+
+  const handlePreviewScreen = (node: MonkeyNode) => {
+    if (node.node_type === "root") return;
+    setSelectedScreenUuid(node.node_uuid);
+    setPreviewScreen(node);
+  };
+
+  const handleGalleryWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    setGalleryZoom((current) => clampZoom(current + (event.deltaY < 0 ? GALLERY_ZOOM_STEP : -GALLERY_ZOOM_STEP)));
+  };
+
   const handleStart = async () => {
-    if (running || !targetAppName.trim()) {
-      return;
-    }
+    if (running || !targetAppName.trim()) return;
     setError(null);
     setLogs([]);
-    setNodes([]);
-    setSelectedNode(null);
-    setShowGraph(false);
-    setGraphRootUuid(null);
+    setScreens([]);
+    setTreeNodes([]);
+    setActions([]);
+    setSelectedScreenUuid(null);
+    setExpanded(new Set());
 
     try {
       const created = await monkeyApi.createSession({
@@ -114,17 +213,26 @@ export default function AgentMonkeyTestPage() {
       stopStreamRef.current?.();
       stopStreamRef.current = monkeyApi.streamExplore(created.session_uuid, {
         onEvent: (event) => {
-          if (event.session) {
-            setSession(event.session);
-          }
-          if (event.nodes && event.nodes.length > 0) {
-            setNodes((current) => mergeNodes(current, event.nodes ?? []));
-          }
+          if (event.session) setSession(event.session);
+          if (event.screens && event.screens.length > 0) setScreens(event.screens);
+          if (event.nodes && event.nodes.length > 0) setTreeNodes(event.nodes);
+          if (event.actions) setActions(event.actions);
           if (event.logs && event.logs.length > 0) {
-            setLogs((current) => [...current, ...event.logs!]);
+            setLogs((current) => {
+              const merged = [...current];
+              for (const log of event.logs!) {
+                if (!merged.some((item) => item.id === log.id && item.message === log.message)) {
+                  merged.push(log);
+                }
+              }
+              return merged;
+            });
           }
-          if (event.type === "tree_update" || event.type === "step") {
-            void reloadTree(created.session_uuid).catch(() => undefined);
+          if (event.session?.focus_screen_uuid ?? event.session?.current_node_uuid) {
+            setSelectedScreenUuid(event.session.focus_screen_uuid ?? event.session.current_node_uuid ?? null);
+          }
+          if (event.type === "bootstrap" || event.type === "step") {
+            void reloadState(created.session_uuid).catch(() => undefined);
           }
         },
         onError: (err) => {
@@ -133,7 +241,7 @@ export default function AgentMonkeyTestPage() {
         },
         onDone: () => {
           setRunning(false);
-          void reloadTree(created.session_uuid).catch(() => undefined);
+          void reloadState(created.session_uuid).catch(() => undefined);
         },
       });
     } catch (err) {
@@ -149,24 +257,11 @@ export default function AgentMonkeyTestPage() {
       stopStreamRef.current?.();
       stopStreamRef.current = null;
       setRunning(false);
-      const updated = await monkeyApi.getSession(session.session_uuid);
-      setSession(updated);
+      await reloadState(session.session_uuid);
     } catch (err) {
       setError(err instanceof Error ? err.message : "停止失败");
     }
   };
-
-  const handleSelectNode = (node: MonkeyNode) => {
-    setSelectedNode(node);
-    setShowGraph(false);
-  };
-
-  const handleSelectRoot = (node: MonkeyNode) => {
-    setGraphRootUuid(node.node_uuid);
-    setShowGraph(true);
-  };
-
-  const previewUrl = selectedNode?.annotated_screenshot_url ?? selectedNode?.screenshot_url ?? null;
 
   return (
     <main className="monkey-workspace">
@@ -202,7 +297,12 @@ export default function AgentMonkeyTestPage() {
             </select>
           </div>
           <div className="monkey-actions">
-            <button className="primary-btn" type="button" disabled={running || !targetAppName.trim()} onClick={() => void handleStart()}>
+            <button
+              className="primary-btn"
+              type="button"
+              disabled={running || !targetAppName.trim()}
+              onClick={() => void handleStart()}
+            >
               开始探索
             </button>
             <button className="secondary-btn" type="button" disabled={!running || !session} onClick={() => void handleStop()}>
@@ -214,79 +314,165 @@ export default function AgentMonkeyTestPage() {
         {session && (
           <div className={`monkey-status ${session.status}`}>
             会话 {session.session_uuid.slice(0, 8)} · 状态 {session.status} · 步骤 {session.step_count}/{session.max_steps}
+            · 屏幕 {screens.filter((s) => s.node_type !== "root").length} · 操作 {actions.length}
             {session.error ? ` · ${session.error}` : ""}
           </div>
         )}
         {error && <div className="monkey-error">{error}</div>}
 
-        <div className="monkey-main">
-          <div className="monkey-tree-panel">
-            <div className="monkey-panel-header">
-              <h3>探索树</h3>
-              {rootNode && (
-                <button type="button" className="secondary-btn" onClick={() => handleSelectRoot(rootNode)}>
-                  查看结构图
+        <div className="monkey-gallery-section fill">
+          <div className="monkey-panel-header">
+            <h3>探索树 · 屏幕画廊</h3>
+            <div className="monkey-gallery-tools">
+              <span className="monkey-hint">Ctrl+滚轮缩放</span>
+              <div className="monkey-zoom-controls">
+                <button
+                  type="button"
+                  className="secondary-btn monkey-zoom-btn"
+                  onClick={() => setGalleryZoom((z) => clampZoom(z - GALLERY_ZOOM_STEP))}
+                  disabled={galleryZoom <= GALLERY_ZOOM_MIN}
+                  aria-label="缩小"
+                >
+                  −
                 </button>
-              )}
-            </div>
-            <div className="monkey-panel-body">
-              {showGraph && graphRootUuid ? (
-                <MonkeyTreeGraph
-                  nodes={nodes}
-                  rootUuid={graphRootUuid}
-                  selectedNodeUuid={selectedNode?.node_uuid ?? null}
-                  onSelectNode={handleSelectNode}
-                />
-              ) : (
-                <MonkeyExploreTree
-                  nodes={nodes}
-                  selectedNodeUuid={selectedNode?.node_uuid ?? null}
-                  onSelectNode={handleSelectNode}
-                  onSelectRoot={handleSelectRoot}
-                />
-              )}
+                <span className="monkey-zoom-label">{Math.round(galleryZoom * 100)}%</span>
+                <button
+                  type="button"
+                  className="secondary-btn monkey-zoom-btn"
+                  onClick={() => setGalleryZoom((z) => clampZoom(z + GALLERY_ZOOM_STEP))}
+                  disabled={galleryZoom >= GALLERY_ZOOM_MAX}
+                  aria-label="放大"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  className="secondary-btn monkey-zoom-btn"
+                  onClick={() => setGalleryZoom(1)}
+                  disabled={galleryZoom === 1}
+                >
+                  重置
+                </button>
+              </div>
             </div>
           </div>
+          <div
+            className="monkey-screen-tree-scroll"
+            ref={galleryScrollRef}
+            onWheel={handleGalleryWheel}
+          >
+            <MonkeyScreenTreeGallery
+              treeNodes={treeNodes}
+              actions={actions}
+              selectedScreenUuid={selectedScreenUuid}
+              focusScreenUuid={session?.focus_screen_uuid ?? session?.current_node_uuid ?? null}
+              zoom={galleryZoom}
+              onSelectScreen={handleSelectScreen}
+              onPreviewScreen={handlePreviewScreen}
+            />
+          </div>
+        </div>
 
-          <div className="monkey-detail-panel">
-            <div className="monkey-panel-header">
-              <h3>{selectedNode ? selectedNode.title : "节点详情 / 日志"}</h3>
-            </div>
-            <div className="monkey-panel-body">
-              {selectedNode ? (
-                <div className="monkey-detail-grid">
-                  {previewUrl ? (
-                    <img className="monkey-shot" src={previewUrl} alt={selectedNode.title} />
-                  ) : (
-                    <div className="monkey-tree-empty">无截图</div>
-                  )}
-                  <div className="monkey-meta">
-                    <div>类型：{selectedNode.node_type}</div>
-                    <div>状态：{selectedNode.status}</div>
-                    <div>深度：{selectedNode.depth}</div>
-                    {selectedNode.center && (
-                      <div>
-                        坐标：({selectedNode.center.x}, {selectedNode.center.y})
-                      </div>
-                    )}
-                    {selectedNode.description && <div>说明：{selectedNode.description}</div>}
-                  </div>
-                </div>
+        {previewScreen && (
+          <MonkeyScreenPreviewModal
+            screen={previewScreen}
+            actions={actions}
+            screens={screens}
+            onClose={() => setPreviewScreen(null)}
+          />
+        )}
+
+        <div className="monkey-collapse-bar">
+          <button
+            type="button"
+            className={`monkey-collapse-toggle ${expanded.has("detail") ? "open" : ""}`}
+            onClick={() => togglePanel("detail")}
+          >
+            {expanded.has("detail") ? "▾" : "▸"} 屏幕详情
+            {selectedScreen ? ` · ${selectedScreen.title}` : ""}
+          </button>
+          {expanded.has("detail") && (
+            <div className="monkey-collapse-body">
+              {previewUrl ? (
+                <img className="monkey-hero-shot" src={previewUrl} alt={selectedScreen?.title ?? "屏幕"} />
               ) : (
-                <div className="monkey-logs">
-                  {logs.length === 0 ? (
-                    <div className="monkey-tree-empty">探索日志将在此显示</div>
-                  ) : (
-                    logs.map((log) => (
-                      <div key={`${log.id}-${log.created_at}`} className={`monkey-log-item ${log.id < 0 ? "live" : ""}`}>
-                        [{formatTime(log.created_at)}] {log.message}
-                      </div>
-                    ))
-                  )}
-                </div>
+                <div className="monkey-tree-empty">在树上点击屏幕节点查看标注大图</div>
               )}
             </div>
-          </div>
+          )}
+        </div>
+
+        <div className="monkey-collapse-bar">
+          <button
+            type="button"
+            className={`monkey-collapse-toggle ${expanded.has("ledger") ? "open" : ""}`}
+            onClick={() => togglePanel("ledger")}
+          >
+            {expanded.has("ledger") ? "▾" : "▸"} 操作账本
+            {selectedScreen ? ` · ${screenActions.length} 条` : ""}
+          </button>
+          {expanded.has("ledger") && (
+            <div className="monkey-collapse-body">
+              {screenActions.length === 0 ? (
+                <div className="monkey-tree-empty">该屏幕暂无编号操作</div>
+              ) : (
+                <table className="monkey-ledger-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>元素</th>
+                      <th>动作</th>
+                      <th>数据依赖</th>
+                      <th>状态</th>
+                      <th>结果屏幕</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {screenActions.map((action) => (
+                      <tr key={action.action_uuid} className={`status-${action.status}`}>
+                        <td>{action.action_no}</td>
+                        <td>{action.element_title}</td>
+                        <td>{actionTypeLabel(action.action_type)}</td>
+                        <td>{action.data_dependency || "无"}</td>
+                        <td>{statusLabel(action.status)}</td>
+                        <td>
+                          {action.result_screen_uuid
+                            ? screens.find((s) => s.node_uuid === action.result_screen_uuid)?.title ?? "已跳转"
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="monkey-collapse-bar">
+          <button
+            type="button"
+            className={`monkey-collapse-toggle ${expanded.has("logs") ? "open" : ""}`}
+            onClick={() => togglePanel("logs")}
+          >
+            {expanded.has("logs") ? "▾" : "▸"} 探索日志 {logs.length > 0 ? ` · ${logs.length} 条` : ""}
+          </button>
+          {expanded.has("logs") && (
+            <div className="monkey-collapse-body monkey-logs">
+              {logs.length === 0 ? (
+                <div className="monkey-tree-empty">日志将在此显示</div>
+              ) : (
+                logs.slice(-50).map((log) => (
+                  <div
+                    key={`${log.id}-${log.created_at}-${log.message}`}
+                    className={`monkey-log-item ${log.id < 0 ? "live" : ""}`}
+                  >
+                    [{formatTime(log.created_at)}] {log.message}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </section>
 
@@ -299,8 +485,8 @@ export default function AgentMonkeyTestPage() {
           onSelectDevice={handleSelectDevice}
           onPermissionPresetAdded={() => undefined}
           readOnly={running}
-          highlightCenter={selectedNode?.center ?? null}
-          highlightBBox={selectedNode?.bbox ?? null}
+          highlightCenter={null}
+          highlightBBox={null}
         />
       </section>
     </main>

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from app.agent_monkey_service.schemas import BBox, Center
 
@@ -22,6 +22,46 @@ def annotate_bbox_on_image(image_bytes: bytes, bbox: BBox | None, center: Center
             x, y = center.x, center.y
             draw.ellipse((x - 10, y - 10, x + 10, y + 10), fill=(59, 130, 246, 220))
             draw.text((x + 14, y - 8), title[:24], fill=(59, 130, 246, 255))
+        buffer = BytesIO()
+        rgba.convert("RGB").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
+def annotate_screen_with_numbers(
+    image_bytes: bytes,
+    labels: list[tuple[BBox | None, Center | None, str]],
+) -> bytes:
+    """在操作位置绘制半透明编号标注。"""
+    with Image.open(BytesIO(image_bytes)) as image:
+        rgba = image.convert("RGBA")
+        overlay = Image.new("RGBA", rgba.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        try:
+            font = ImageFont.truetype("arial.ttf", 16)
+        except OSError:
+            font = ImageFont.load_default()
+
+        for bbox, center, label in labels:
+            if bbox and bbox.w > 0 and bbox.h > 0:
+                draw.rectangle(
+                    (bbox.x, bbox.y, bbox.x + bbox.w, bbox.y + bbox.h),
+                    outline=(34, 197, 94, 90),
+                    width=2,
+                )
+            if not center:
+                continue
+            x, y = center.x, center.y
+            text = str(label).strip().split()[0]
+            tw, th = draw.textbbox((0, 0), text, font=font)[2:]
+            pad = 4
+            rx0 = x - tw / 2 - pad
+            ry0 = y - th / 2 - pad
+            rx1 = x + tw / 2 + pad
+            ry1 = y + th / 2 + pad
+            draw.rounded_rectangle((rx0, ry0, rx1, ry1), radius=10, fill=(239, 68, 68, 110), outline=(255, 255, 255, 160), width=1)
+            draw.text((x - tw / 2, y - th / 2 - 1), text, fill=(255, 255, 255, 220), font=font)
+
+        rgba = Image.alpha_composite(rgba, overlay)
         buffer = BytesIO()
         rgba.convert("RGB").save(buffer, format="PNG")
         return buffer.getvalue()

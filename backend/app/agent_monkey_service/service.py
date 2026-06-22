@@ -9,6 +9,7 @@ from app.agent_monkey_service.repository import monkey_repository
 from app.agent_monkey_service.run_registry import monkey_run_registry
 from app.agent_monkey_service.schemas import (
     CreateMonkeySessionRequest,
+    MonkeyExploreStateResponse,
     MonkeySessionResponse,
     MonkeyTreeResponse,
     ProviderInfo,
@@ -77,6 +78,14 @@ class AgentMonkeyService:
         if not session:
             return None
         return monkey_repository.tree_to_response(session)
+
+    async def get_explore_state(
+        self, db: AsyncSession, session_uuid: str
+    ) -> MonkeyExploreStateResponse | None:
+        session = await monkey_repository.get_session(db, session_uuid)
+        if not session:
+            return None
+        return monkey_repository.explore_state_to_response(session)
 
     async def stop_session(self, db: AsyncSession, session_uuid: str) -> bool:
         session = await monkey_repository.get_session(db, session_uuid)

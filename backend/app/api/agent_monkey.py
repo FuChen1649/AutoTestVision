@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent_monkey_service.repository import monkey_repository
+from app.agent_monkey_service.repository import monkey_repository, monkey_session_dir
 from app.agent_monkey_service.schemas import (
     CreateMonkeySessionRequest,
+    MonkeyExploreStateResponse,
     MonkeySessionResponse,
     MonkeyTreeResponse,
     ProvidersResponse,
@@ -52,6 +53,16 @@ async def get_tree(session_uuid: str, db: AsyncSession = Depends(get_db)) -> Mon
     return tree
 
 
+@router.get("/sessions/{session_uuid}/state", response_model=MonkeyExploreStateResponse)
+async def get_explore_state(
+    session_uuid: str, db: AsyncSession = Depends(get_db)
+) -> MonkeyExploreStateResponse:
+    state = await agent_monkey_service.get_explore_state(db, session_uuid)
+    if not state:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return state
+
+
 @router.post("/sessions/{session_uuid}/start")
 async def start_explore(session_uuid: str, db: AsyncSession = Depends(get_db)) -> StreamingResponse:
     session = await agent_monkey_service.get_session(db, session_uuid)
@@ -89,7 +100,7 @@ async def get_screenshot(session_uuid: str, filename: str) -> FileResponse:
     safe_name = Path(filename).name
     if safe_name != filename or ".." in filename:
         raise HTTPException(status_code=400, detail="非法文件名")
-    path = monkey_repository.monkey_session_dir(session_uuid) / safe_name
+    path = monkey_session_dir(session_uuid) / safe_name
     if not path.exists():
         raise HTTPException(status_code=404, detail="截图不存在")
     return FileResponse(path=path, media_type="image/png", filename=safe_name)

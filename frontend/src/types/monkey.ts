@@ -1,5 +1,5 @@
 export type MonkeyNodeType = "root" | "screen" | "app" | "element" | "container";
-export type MonkeyNodeStatus = "discovered" | "explored" | "skipped" | "failed";
+export type MonkeyNodeStatus = "discovered" | "explored" | "exploring" | "skipped" | "failed";
 export type MonkeySessionStatus = "idle" | "running" | "stopped" | "completed" | "failed";
 
 export interface MonkeyBBox {
@@ -44,6 +44,7 @@ export interface MonkeySession {
   max_steps: number;
   max_depth: number;
   current_node_uuid?: string | null;
+  focus_screen_uuid?: string | null;
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -52,6 +53,34 @@ export interface MonkeySession {
 export interface MonkeyTree {
   session_uuid: string;
   nodes: MonkeyNode[];
+}
+
+export type MonkeyActionStatus = "pending" | "executed" | "failed" | "skipped";
+
+export interface MonkeyScreenAction {
+  action_uuid: string;
+  screen_node_uuid: string;
+  action_no: number;
+  element_title: string;
+  action_type: string;
+  bbox?: MonkeyBBox | null;
+  center?: MonkeyCenter | null;
+  data_dependency?: string | null;
+  status: MonkeyActionStatus;
+  result_screen_uuid?: string | null;
+  element_node_uuid?: string | null;
+  step_index?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MonkeyExploreState {
+  session_uuid: string;
+  session: MonkeySession;
+  screens: MonkeyNode[];
+  tree_nodes: MonkeyNode[];
+  actions: MonkeyScreenAction[];
+  logs: MonkeyLogItem[];
 }
 
 export interface MonkeyLogItem {
@@ -67,6 +96,8 @@ export interface MonkeyStreamEvent {
   type: string;
   session?: MonkeySession | null;
   nodes?: MonkeyNode[];
+  screens?: MonkeyNode[];
+  actions?: MonkeyScreenAction[];
   logs?: MonkeyLogItem[];
   message?: string | null;
 }

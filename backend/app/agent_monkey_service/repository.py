@@ -16,12 +16,14 @@ from app.agent_monkey_service.schemas import (
     BBox,
     Center,
     MonkeyActionRecordResponse,
+    MonkeyExploreStateResponse,
     MonkeyLogItem,
     MonkeyNodeResponse,
+    MonkeyScreenActionResponse,
     MonkeySessionResponse,
     MonkeyTreeResponse,
 )
-from app.models.monkey import MonkeyActionRecord, MonkeyLog, MonkeyNode, MonkeySession
+from app.models.monkey import MonkeyActionRecord, MonkeyLog, MonkeyNode, MonkeyScreenAction, MonkeySession
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 MONKEY_DATA_ROOT = BACKEND_ROOT / "data" / "monkey"
@@ -73,8 +75,10 @@ class MonkeyRepository:
                 selectinload(MonkeySession.nodes),
                 selectinload(MonkeySession.logs),
                 selectinload(MonkeySession.actions),
+                selectinload(MonkeySession.screen_actions),
             )
             .where(MonkeySession.session_uuid == session_uuid)
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 
@@ -186,6 +190,46 @@ class MonkeyRepository:
         await db.flush()
         return node
 
+    async def add_screen_action(
+        self,
+        db: AsyncSession,
+        session: MonkeySession,
+        *,
+        screen_node_uuid: str,
+        action_no: int,
+        element_title: str,
+        action_type: str = "tap",
+        bbox: BBox | None = None,
+        center: Center | None = None,
+        swipe_to: BBox | None = None,
+        data_dependency: str | None = None,
+        replay_script: list | None = None,
+    ) -> MonkeyScreenAction:
+        action = MonkeyScreenAction(
+            action_uuid=str(uuid.uuid4()),
+            session_id=session.id,
+            screen_node_uuid=screen_node_uuid,
+            action_no=action_no,
+            element_title=element_title,
+            action_type=action_type,
+            bbox_json=bbox.model_dump_json() if bbox else None,
+            center_json=center.model_dump_json() if center else None,
+            swipe_to_json=swipe_to.model_dump_json() if swipe_to else None,
+            data_dependency=data_dependency,
+            status="pending",
+            replay_script_json=json.dumps(replay_script, ensure_ascii=False) if replay_script else None,
+        )
+        db.add(action)
+        await db.flush()
+        return action
+
+    async def update_screen_action(self, db: AsyncSession, action: MonkeyScreenAction, **fields) -> MonkeyScreenAction:
+        for key, value in fields.items():
+            setattr(action, key, value)
+        action.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        return action
+
     async def get_node(self, db: AsyncSession, session: MonkeySession, node_uuid: str) -> MonkeyNode | None:
         result = await db.execute(
             select(MonkeyNode).where(
@@ -238,6 +282,9 @@ class MonkeyRepository:
         )
 
     def session_to_response(self, session: MonkeySession) -> MonkeySessionResponse:
+        from app.agent_monkey_service.screen_manager import monkey_screen_manager
+
+        focus_uuid = monkey_screen_manager.get_focus_screen_uuid(session)
         return MonkeySessionResponse(
             session_uuid=session.session_uuid,
             serial=session.serial,
@@ -247,7 +294,8 @@ class MonkeyRepository:
             step_count=session.step_count,
             max_steps=session.max_steps,
             max_depth=session.max_depth,
-            current_node_uuid=session.current_node_uuid,
+            current_node_uuid=focus_uuid or session.current_node_uuid,
+            focus_screen_uuid=focus_uuid,
             error=session.error,
             created_at=session.created_at,
             updated_at=session.updated_at,
@@ -290,6 +338,39 @@ class MonkeyRepository:
             )
             for record in sorted(session.actions, key=lambda item: item.step_index)
         ]
+
+    def screen_action_to_response(self, action: MonkeyScreenAction) -> MonkeyScreenActionResponse:
+        bbox = BBox.model_validate_json(action.bbox_json) if action.bbox_json else None
+        center = Center.model_validate_json(action.center_json) if action.center_json else None
+        return MonkeyScreenActionResponse(
+            action_uuid=action.action_uuid,
+            screen_node_uuid=action.screen_node_uuid,
+            action_no=action.action_no,
+            element_title=action.element_title,
+            action_type=action.action_type,
+            bbox=bbox,
+            center=center,
+            data_dependency=action.data_dependency,
+            status=action.status,  # type: ignore[arg-type]
+            result_screen_uuid=action.result_screen_uuid,
+            element_node_uuid=action.element_node_uuid,
+            step_index=action.step_index,
+            created_at=action.created_at,
+            updated_at=action.updated_at,
+        )
+
+    def explore_state_to_response(self, session: MonkeySession) -> MonkeyExploreStateResponse:
+        tree_nodes = sorted(session.nodes, key=lambda item: (item.depth, item.id))
+        screens = [n for n in tree_nodes if n.node_type in {"root", "screen"}]
+        actions = sorted(session.screen_actions, key=lambda item: (item.screen_node_uuid, item.action_no))
+        return MonkeyExploreStateResponse(
+            session_uuid=session.session_uuid,
+            session=self.session_to_response(session),
+            screens=[self.node_to_response(session.session_uuid, node) for node in screens],
+            tree_nodes=[self.node_to_response(session.session_uuid, node) for node in tree_nodes],
+            actions=[self.screen_action_to_response(action) for action in actions],
+            logs=self.logs_to_items(session),
+        )
 
 
 def compute_screen_fingerprint(image_bytes: bytes) -> str:
