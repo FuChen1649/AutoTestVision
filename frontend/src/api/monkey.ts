@@ -2,6 +2,7 @@ import { readApiResponse } from "./http";
 import type {
   CreateMonkeySessionPayload,
   MonkeyExploreState,
+  MonkeyLogsResponse,
   MonkeyProvidersResponse,
   MonkeySession,
   MonkeyStreamEvent,
@@ -36,6 +37,11 @@ export const monkeyApi = {
 
   getExploreState: (sessionUuid: string) =>
     request<MonkeyExploreState>(`/sessions/${sessionUuid}/state`),
+
+  getLogsSince: (sessionUuid: string, afterId = 0) =>
+    request<MonkeyLogsResponse>(
+      `/sessions/${sessionUuid}/logs?after_id=${encodeURIComponent(String(afterId))}`
+    ),
 
   stopSession: (sessionUuid: string) =>
     request<void>(`/sessions/${sessionUuid}/stop`, { method: "POST" }),

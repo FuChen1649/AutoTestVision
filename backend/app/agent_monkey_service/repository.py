@@ -116,6 +116,16 @@ class MonkeyRepository:
         await db.flush()
         return log
 
+    async def list_logs_since(
+        self, db: AsyncSession, session: MonkeySession, after_id: int = 0
+    ) -> list[MonkeyLog]:
+        result = await db.execute(
+            select(MonkeyLog)
+            .where(MonkeyLog.session_id == session.id, MonkeyLog.id > after_id)
+            .order_by(MonkeyLog.id.asc())
+        )
+        return list(result.scalars().all())
+
     async def add_action(
         self,
         db: AsyncSession,
@@ -308,20 +318,21 @@ class MonkeyRepository:
             nodes=[self.node_to_response(session.session_uuid, node) for node in nodes],
         )
 
+    def log_to_item(self, log: MonkeyLog) -> MonkeyLogItem:
+        detail = json.loads(log.detail_json) if log.detail_json else None
+        return MonkeyLogItem(
+            id=log.id,
+            step_index=log.step_index,
+            log_type=log.log_type,
+            message=log.message,
+            detail=detail,
+            created_at=log.created_at,
+        )
+
     def logs_to_items(self, session: MonkeySession) -> list[MonkeyLogItem]:
         items: list[MonkeyLogItem] = []
         for log in sorted(session.logs, key=lambda item: item.created_at):
-            detail = json.loads(log.detail_json) if log.detail_json else None
-            items.append(
-                MonkeyLogItem(
-                    id=log.id,
-                    step_index=log.step_index,
-                    log_type=log.log_type,
-                    message=log.message,
-                    detail=detail,
-                    created_at=log.created_at,
-                )
-            )
+            items.append(self.log_to_item(log))
         return items
 
     def actions_to_response(self, session: MonkeySession) -> list[MonkeyActionRecordResponse]:

@@ -8,6 +8,7 @@ from app.agent_monkey_service.repository import monkey_repository, monkey_sessio
 from app.agent_monkey_service.schemas import (
     CreateMonkeySessionRequest,
     MonkeyExploreStateResponse,
+    MonkeyLogsResponse,
     MonkeySessionResponse,
     MonkeyTreeResponse,
     ProvidersResponse,
@@ -61,6 +62,18 @@ async def get_explore_state(
     if not state:
         raise HTTPException(status_code=404, detail="会话不存在")
     return state
+
+
+@router.get("/sessions/{session_uuid}/logs", response_model=MonkeyLogsResponse)
+async def get_session_logs(
+    session_uuid: str,
+    after_id: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> MonkeyLogsResponse:
+    result = await agent_monkey_service.get_logs_since(db, session_uuid, after_id=after_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return result
 
 
 @router.post("/sessions/{session_uuid}/start")

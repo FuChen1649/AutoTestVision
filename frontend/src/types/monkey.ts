@@ -83,6 +83,12 @@ export interface MonkeyExploreState {
   logs: MonkeyLogItem[];
 }
 
+export interface MonkeyLogsResponse {
+  session_uuid: string;
+  logs: MonkeyLogItem[];
+  latest_id: number;
+}
+
 export interface MonkeyLogItem {
   id: number;
   step_index?: number | null;

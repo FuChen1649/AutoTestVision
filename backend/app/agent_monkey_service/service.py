@@ -10,6 +10,7 @@ from app.agent_monkey_service.run_registry import monkey_run_registry
 from app.agent_monkey_service.schemas import (
     CreateMonkeySessionRequest,
     MonkeyExploreStateResponse,
+    MonkeyLogsResponse,
     MonkeySessionResponse,
     MonkeyTreeResponse,
     ProviderInfo,
@@ -86,6 +87,21 @@ class AgentMonkeyService:
         if not session:
             return None
         return monkey_repository.explore_state_to_response(session)
+
+    async def get_logs_since(
+        self, db: AsyncSession, session_uuid: str, after_id: int = 0
+    ) -> MonkeyLogsResponse | None:
+        session = await monkey_repository.get_session(db, session_uuid)
+        if not session:
+            return None
+        logs = await monkey_repository.list_logs_since(db, session, after_id=after_id)
+        items = [monkey_repository.log_to_item(log) for log in logs]
+        latest_id = items[-1].id if items else after_id
+        return MonkeyLogsResponse(
+            session_uuid=session.session_uuid,
+            logs=items,
+            latest_id=latest_id,
+        )
 
     async def stop_session(self, db: AsyncSession, session_uuid: str) -> bool:
         session = await monkey_repository.get_session(db, session_uuid)

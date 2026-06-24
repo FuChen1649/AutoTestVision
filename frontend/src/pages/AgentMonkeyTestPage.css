@@ -508,15 +508,78 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
 }
 
 .monkey-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 6px 10px;
   border-radius: 8px;
   background: #111827;
   border: 1px solid #1f2937;
   font-size: 0.78rem;
   color: #d1d5db;
+  line-height: 1.45;
+}
+
+.monkey-log-time {
+  flex-shrink: 0;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.monkey-log-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.monkey-log-badge.type-model {
+  background: rgba(168, 85, 247, 0.2);
+  color: #d8b4fe;
+}
+
+.monkey-log-badge.type-nav {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
+.monkey-log-badge.type-action {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+
+.monkey-log-badge.type-screen {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
+}
+
+.monkey-log-badge.type-system {
+  background: rgba(107, 114, 128, 0.25);
+  color: #9ca3af;
+}
+
+.monkey-log-message {
+  flex: 1;
+  word-break: break-word;
+}
+
+.monkey-log-item.log-type-model {
+  border-color: rgba(168, 85, 247, 0.25);
+}
+
+.monkey-log-item.log-type-nav {
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+.monkey-log-item.log-type-action {
+  border-color: rgba(34, 197, 94, 0.22);
 }
 
 .monkey-log-item.live {

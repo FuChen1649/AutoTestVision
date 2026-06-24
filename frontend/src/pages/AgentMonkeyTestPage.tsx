@@ -42,8 +42,29 @@ function statusLabel(status: string) {
   return "待执行";
 }
 
+function logTypeLabel(logType: string) {
+  if (logType === "model") return "模型";
+  if (logType === "nav") return "导航";
+  if (logType === "action") return "操作";
+  if (logType === "screen") return "屏幕";
+  return "系统";
+}
+
+function mergeLogs(current: MonkeyLogItem[], incoming: MonkeyLogItem[]) {
+  const merged = [...current];
+  for (const log of incoming) {
+    if (!merged.some((item) => item.id === log.id)) {
+      merged.push(log);
+    }
+  }
+  merged.sort((a, b) => a.id - b.id);
+  return merged;
+}
+
 export default function AgentMonkeyTestPage() {
   const stopStreamRef = useRef<(() => void) | null>(null);
+  const lastLogIdRef = useRef(0);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
@@ -143,6 +164,7 @@ export default function AgentMonkeyTestPage() {
       setTreeNodes(state.tree_nodes?.length ? state.tree_nodes : state.screens);
       setActions(state.actions);
       setLogs(state.logs);
+      lastLogIdRef.current = state.logs.reduce((max, log) => Math.max(max, log.id), 0);
       setSelectedScreenUuid((current) => {
         const focus = state.session.focus_screen_uuid ?? state.session.current_node_uuid;
         if (current && state.screens.some((s) => s.node_uuid === current)) return current;
@@ -168,6 +190,28 @@ export default function AgentMonkeyTestPage() {
     void loadProviders();
     return () => stopStreamRef.current?.();
   }, [refreshDevices, loadProviders]);
+
+  useEffect(() => {
+    if (!running || !session) return;
+    const timer = window.setInterval(() => {
+      void monkeyApi
+        .getLogsSince(session.session_uuid, lastLogIdRef.current)
+        .then((resp) => {
+          if (resp.logs.length > 0) {
+            lastLogIdRef.current = resp.latest_id;
+            setLogs((current) => mergeLogs(current, resp.logs));
+          }
+        })
+        .catch(() => undefined);
+      void reloadState(session.session_uuid).catch(() => undefined);
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [running, session, reloadState]);
+
+  useEffect(() => {
+    if (!running || !expanded.has("logs")) return;
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [logs, running, expanded]);
 
   const handleSelectDevice = async (serial: string) => {
     setSelectedSerial(serial);
@@ -195,11 +239,12 @@ export default function AgentMonkeyTestPage() {
     if (running || !targetAppName.trim()) return;
     setError(null);
     setLogs([]);
+    lastLogIdRef.current = 0;
     setScreens([]);
     setTreeNodes([]);
     setActions([]);
     setSelectedScreenUuid(null);
-    setExpanded(new Set());
+    setExpanded(new Set(["logs"]));
 
     try {
       const created = await monkeyApi.createSession({
@@ -219,19 +264,20 @@ export default function AgentMonkeyTestPage() {
           if (event.actions) setActions(event.actions);
           if (event.logs && event.logs.length > 0) {
             setLogs((current) => {
-              const merged = [...current];
-              for (const log of event.logs!) {
-                if (!merged.some((item) => item.id === log.id && item.message === log.message)) {
-                  merged.push(log);
-                }
-              }
+              const merged = mergeLogs(current, event.logs!);
+              lastLogIdRef.current = merged.reduce((max, log) => Math.max(max, log.id), 0);
               return merged;
             });
           }
           if (event.session?.focus_screen_uuid ?? event.session?.current_node_uuid) {
             setSelectedScreenUuid(event.session.focus_screen_uuid ?? event.session.current_node_uuid ?? null);
           }
-          if (event.type === "bootstrap" || event.type === "step") {
+          if (
+            event.type === "bootstrap" ||
+            event.type === "step" ||
+            event.type === "progress" ||
+            event.type === "start"
+          ) {
             void reloadState(created.session_uuid).catch(() => undefined);
           }
         },
@@ -313,7 +359,10 @@ export default function AgentMonkeyTestPage() {
 
         {session && (
           <div className={`monkey-status ${session.status}`}>
-            会话 {session.session_uuid.slice(0, 8)} · 状态 {session.status} · 步骤 {session.step_count}/{session.max_steps}
+            会话 {session.session_uuid.slice(0, 8)} · 状态 {session.status} · 步骤{" "}
+            {session.max_steps > 0
+              ? `${session.step_count}/${session.max_steps}`
+              : session.step_count}
             · 屏幕 {screens.filter((s) => s.node_type !== "root").length} · 操作 {actions.length}
             {session.error ? ` · ${session.error}` : ""}
           </div>
@@ -455,21 +504,30 @@ export default function AgentMonkeyTestPage() {
             className={`monkey-collapse-toggle ${expanded.has("logs") ? "open" : ""}`}
             onClick={() => togglePanel("logs")}
           >
-            {expanded.has("logs") ? "▾" : "▸"} 探索日志 {logs.length > 0 ? ` · ${logs.length} 条` : ""}
+            {expanded.has("logs") ? "▾" : "▸"} 探索日志
+            {logs.length > 0 ? ` · ${logs.length} 条` : ""}
+            {running ? " · 实时更新中" : ""}
           </button>
           {expanded.has("logs") && (
             <div className="monkey-collapse-body monkey-logs">
               {logs.length === 0 ? (
                 <div className="monkey-tree-empty">日志将在此显示</div>
               ) : (
-                logs.slice(-50).map((log) => (
-                  <div
-                    key={`${log.id}-${log.created_at}-${log.message}`}
-                    className={`monkey-log-item ${log.id < 0 ? "live" : ""}`}
-                  >
-                    [{formatTime(log.created_at)}] {log.message}
-                  </div>
-                ))
+                <>
+                  {logs.slice(-80).map((log) => (
+                    <div
+                      key={log.id}
+                      className={`monkey-log-item log-type-${log.log_type} ${running ? "live" : ""}`}
+                    >
+                      <span className="monkey-log-time">[{formatTime(log.created_at)}]</span>
+                      <span className={`monkey-log-badge type-${log.log_type}`}>
+                        {logTypeLabel(log.log_type)}
+                      </span>
+                      <span className="monkey-log-message">{log.message}</span>
+                    </div>
+                  ))}
+                  <div ref={logsEndRef} />
+                </>
               )}
             </div>
           )}

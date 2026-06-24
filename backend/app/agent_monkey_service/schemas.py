@@ -105,6 +105,12 @@ class MonkeyExploreStateResponse(BaseModel):
     logs: list[MonkeyLogItem] = Field(default_factory=list)
 
 
+class MonkeyLogsResponse(BaseModel):
+    session_uuid: str
+    logs: list[MonkeyLogItem] = Field(default_factory=list)
+    latest_id: int = 0
+
+
 class MonkeyTreeResponse(BaseModel):
     session_uuid: str
     nodes: list[MonkeyNodeResponse] = Field(default_factory=list)
@@ -114,7 +120,7 @@ class CreateMonkeySessionRequest(BaseModel):
     target_app_name: str = Field(min_length=1, max_length=120)
     serial: str | None = None
     llm_provider: str | None = None
-    max_steps: int = Field(default=25, ge=1, le=100)
+    max_steps: int = Field(default=0, ge=0, description="0 表示不限制探索步数")
     max_depth: int = Field(default=6, ge=1, le=12)
 
 

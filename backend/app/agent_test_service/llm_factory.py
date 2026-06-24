@@ -186,6 +186,13 @@ class LLMFactory:
         )
         return client
 
+    def describe(self, provider: str | None) -> str:
+        resolved = self._resolve_provider(provider)
+        if resolved is None:
+            return "未配置"
+        spec = _spec_of(resolved)
+        return f"{spec.label} / {spec.model}"
+
     def _resolve_provider(self, provider: str | None) -> ProviderId | None:
         if provider:
             normalized = provider.strip().lower()

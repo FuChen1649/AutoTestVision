@@ -16,7 +16,7 @@ class MonkeySession(Base):
     status: Mapped[str] = mapped_column(Text, default="idle")
     llm_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
     step_count: Mapped[int] = mapped_column(Integer, default=0)
-    max_steps: Mapped[int] = mapped_column(Integer, default=25)
+    max_steps: Mapped[int] = mapped_column(Integer, default=0)
     max_depth: Mapped[int] = mapped_column(Integer, default=6)
     current_node_uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
     navigation_stack_json: Mapped[str | None] = mapped_column(Text, nullable=True)
