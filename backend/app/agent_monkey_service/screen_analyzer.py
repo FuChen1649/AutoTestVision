@@ -34,6 +34,7 @@ DISCOVERY_PROMPT = """你是 Android UI 迷宫探索 Agent（AgentMonkeyTest）�
 - bbox 使用 0-1000 相对坐标，数字将标注在 bbox 中心操作位置
 - suggested_action 只能是 tap / long_press / swipe
 - 一次性列出当前屏幕上所有与目标应用相关的可点击元素
+- explore_state.parent_screen_elements 列出了父屏幕已有元素，必须排除相同/相似元素（如返回、底栏、标题栏重复项）
 - 若目标应用不在屏幕上，优先给出其桌面图标
 - 不要输出 next_action_no、should_stop
 - 不要输出代码或 markdown

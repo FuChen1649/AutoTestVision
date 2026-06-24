@@ -89,6 +89,33 @@ def center_from_bbox(bbox: BBox) -> Center:
     return Center(x=bbox.x + bbox.w // 2, y=bbox.y + bbox.h // 2)
 
 
+def bbox_overlap_ratio(a: BBox, b: BBox) -> float:
+    """返回两框交集面积占较小框面积的比例，用于去重。"""
+    x1 = max(a.x, b.x)
+    y1 = max(a.y, b.y)
+    x2 = min(a.x + a.w, b.x + b.w)
+    y2 = min(a.y + a.h, b.y + b.h)
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    inter = (x2 - x1) * (y2 - y1)
+    smaller = min(a.w * a.h, b.w * b.h)
+    if smaller <= 0:
+        return 0.0
+    return inter / smaller
+
+
+def titles_similar(a: str, b: str) -> bool:
+    left = (a or "").strip().lower()
+    right = (b or "").strip().lower()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if left in right or right in left:
+        return True
+    return False
+
+
 def bytes_to_data_url(image_bytes: bytes) -> str:
     encoded = base64.b64encode(image_bytes).decode("ascii")
     return f"data:image/png;base64,{encoded}"

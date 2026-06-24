@@ -108,6 +108,9 @@ class MonkeyExplorer:
                     target_screen=focus_screen,
                     nodes_by_uuid=nodes_by_uuid,
                 )
+                image_bytes, width, height = self._analysis_image(
+                    session.session_uuid, focus_screen, image_bytes, width, height
+                )
                 await self._log(
                     db,
                     session,
@@ -120,10 +123,17 @@ class MonkeyExplorer:
                 screen_actions = actions_by_screen.get(focus_screen.node_uuid, [])
                 pending_actions = [a for a in screen_actions if a.status == "pending"]
 
-                # --- 阶段 A：首次进入屏幕，模型识别全部相关元素 ---
-                if not screen_actions:
+                # --- 阶段 A：首次进入屏幕，模型识别全部相关元素（仅一次，截图固化） ---
+                if not monkey_screen_manager.is_discovery_done(focus_screen):
+                    ancestor_actions = monkey_screen_manager.collect_ancestor_actions(
+                        focus_screen, nodes_by_uuid, actions_by_screen
+                    )
                     explore_state = self._build_explore_state(
-                        session, focus_screen, actions_by_screen, phase="discover"
+                        session,
+                        focus_screen,
+                        actions_by_screen,
+                        phase="discover",
+                        ancestor_actions=ancestor_actions,
                     )
                     await self._log(
                         db,
@@ -142,7 +152,6 @@ class MonkeyExplorer:
                             step_index=step,
                             log_type=log_type,
                         )
-                        # 注意：不能在回调里 yield，由 discover_screen 前后 yield
 
                     analysis = await monkey_screen_analyzer.discover_screen(
                         provider=session.llm_provider,
@@ -157,11 +166,18 @@ class MonkeyExplorer:
                     )
                     yield await self._yield_progress(db, session_uuid, "progress")
 
-                    if analysis.get("screen_title"):
+                    if analysis.get("screen_title") and not monkey_screen_manager.is_screenshot_locked(
+                        focus_screen
+                    ):
                         focus_screen.title = str(analysis["screen_title"])[:120]
 
+                    if not focus_screen.screenshot_path:
+                        await self._freeze_screen_snapshot(
+                            session, focus_screen, image_bytes, width, height
+                        )
+
                     replay_script = monkey_screen_manager.screen_replay_script(focus_screen)
-                    new_actions = await monkey_screen_manager.upsert_discovered_actions(
+                    new_actions, skipped = await monkey_screen_manager.upsert_discovered_actions(
                         db,
                         session,
                         screen_node=focus_screen,
@@ -171,15 +187,17 @@ class MonkeyExplorer:
                         replay_script=replay_script,
                         actions_by_screen=actions_by_screen,
                         nodes_by_uuid=nodes_by_uuid,
+                        ancestor_actions=ancestor_actions,
                     )
                     all_screen_actions = actions_by_screen.get(focus_screen.node_uuid, [])
-                    await monkey_screen_manager.refresh_screen_annotation(
+                    await monkey_screen_manager.finalize_screen_discovery(
                         db, session, focus_screen, all_screen_actions
                     )
+                    skip_msg = f"，排除与父屏重复 {len(skipped)} 个" if skipped else ""
                     await self._log(
                         db,
                         session,
-                        f"「{focus_screen.title}」识别到 {len(all_screen_actions)} 个元素（新增 {len(new_actions)}），已更新标注图",
+                        f"「{focus_screen.title}」识别到 {len(all_screen_actions)} 个元素（新增 {len(new_actions)}{skip_msg}），截图已固化",
                         step_index=step,
                         log_type="screen",
                     )
@@ -189,7 +207,7 @@ class MonkeyExplorer:
                     yield await self._yield_progress(db, session_uuid, "step")
                     continue
 
-                # --- 阶段 B：逐一执行 pending 元素 ---
+                # --- 阶段 B：深度优先 — 执行当前屏第一个 pending，再进入其子屏 ---
                 if pending_actions:
                     action = pending_actions[0]
                     await self._log(
@@ -281,105 +299,128 @@ class MonkeyExplorer:
                     await monkey_screen_manager.refresh_screen_annotation(
                         db, session, focus_screen, all_screen_actions
                     )
-                    remaining = len([a for a in all_screen_actions if a.status == "pending"])
-                    await self._log(
-                        db,
-                        session,
-                        f"已保存子屏幕「{result_screen.title}」；父屏剩余 {remaining} 个待探索元素",
-                        step_index=step,
-                        log_type="screen",
-                    )
-                    yield await self._yield_progress(db, session_uuid, "progress")
 
+                    if monkey_screen_manager.exceeds_max_depth(result_screen, session.max_depth):
+                        result_screen.status = "skipped"
+                        await self._log(
+                            db,
+                            session,
+                            f"子屏「{result_screen.title}」超过最大深度 {session.max_depth}，跳过",
+                            step_index=step,
+                            log_type="nav",
+                        )
+                        await monkey_screen_manager.return_device_to_focus_screen(
+                            db,
+                            session,
+                            step_index=step,
+                            focus_screen=focus_screen,
+                            nodes_by_uuid=nodes_by_uuid,
+                        )
+                        await monkey_repository.update_session(
+                            db, session, step_count=step, current_node_uuid=focus_screen.node_uuid
+                        )
+                        yield await self._yield_progress(db, session_uuid, "step")
+                        continue
+
+                    monkey_screen_manager.push_explore_stack(session, result_screen.node_uuid)
                     await self._log(
                         db,
                         session,
-                        f"回放路径，返回父屏「{focus_screen.title}」",
+                        f"深度优先进入子屏「{result_screen.title}」，完成后再回「{focus_screen.title}」继续",
                         step_index=step,
                         log_type="nav",
                     )
-                    await monkey_screen_manager.return_device_to_focus_screen(
-                        db,
-                        session,
-                        step_index=step,
-                        focus_screen=focus_screen,
-                        nodes_by_uuid=nodes_by_uuid,
-                    )
-                    await self._log(
-                        db,
-                        session,
-                        f"已回到父屏「{focus_screen.title}」",
-                        step_index=step,
-                        log_type="nav",
-                    )
-                    monkey_screen_manager.save_focus_screen(session, focus_screen.node_uuid)
                     await monkey_repository.update_session(
-                        db, session, step_count=step, current_node_uuid=focus_screen.node_uuid
+                        db, session, step_count=step, current_node_uuid=result_screen.node_uuid
                     )
                     yield await self._yield_progress(db, session_uuid, "step")
                     continue
 
-                # --- 阶段 C：当前屏幕元素已全部执行，切换子屏幕 ---
-                monkey_screen_manager.mark_screen_explored_if_done(focus_screen, actions_by_screen)
-                next_focus = monkey_screen_manager.pick_next_child_screen(
-                    session,
-                    nodes_by_uuid,
-                    actions_by_screen,
-                    current_focus_uuid=focus_screen.node_uuid,
+                # --- 阶段 C：当前屏无 pending，检查是否还有未完成的子屏（DFS） ---
+                child_focus = monkey_screen_manager.first_unexplored_child_screen(
+                    focus_screen, session, nodes_by_uuid, actions_by_screen
                 )
-                if not next_focus:
+                if child_focus:
+                    await self._log(
+                        db,
+                        session,
+                        f"进入子屏「{child_focus.title}」继续深度探索",
+                        step_index=step,
+                        log_type="nav",
+                    )
+                    yield await self._yield_progress(db, session_uuid, "progress")
+                    try:
+                        await monkey_screen_manager.navigate_to_child_screen(
+                            db,
+                            session,
+                            step_index=step,
+                            child_screen=child_focus,
+                            nodes_by_uuid=nodes_by_uuid,
+                            from_parent=focus_screen,
+                        )
+                        monkey_screen_manager.push_explore_stack(session, child_focus.node_uuid)
+                        await monkey_repository.update_session(
+                            db, session, step_count=step, current_node_uuid=child_focus.node_uuid
+                        )
+                        yield await self._yield_progress(db, session_uuid, "step")
+                        continue
+                    except Exception as exc:
+                        await self._log(
+                            db,
+                            session,
+                            f"进入子屏幕失败: {exc}",
+                            step_index=step,
+                            log_type="nav",
+                        )
+                        child_focus.status = "failed"
+                        await monkey_repository.update_session(
+                            db, session, step_count=step
+                        )
+                        yield await self._yield_progress(db, session_uuid, "step")
+                        continue
+
+                # --- 阶段 D：当前屏及子树已完成，回退到父屏 ---
+                monkey_screen_manager.mark_screen_explored_if_done(
+                    focus_screen,
+                    actions_by_screen,
+                    session=session,
+                    nodes_by_uuid=nodes_by_uuid,
+                )
+                stack = monkey_screen_manager.get_explore_stack(session)
+                if len(stack) <= 1:
                     await monkey_repository.update_session(db, session, status="completed", step_count=step)
                     await self._log(db, session, "所有屏幕已探索完毕", step_index=step, log_type="system")
                     yield await self._yield_progress(db, session_uuid, "step")
                     break
 
+                parent_uuid = monkey_screen_manager.pop_explore_stack(session)
+                if not parent_uuid:
+                    await monkey_repository.update_session(db, session, status="completed", step_count=step)
+                    await self._log(db, session, "所有屏幕已探索完毕", step_index=step, log_type="system")
+                    yield await self._yield_progress(db, session_uuid, "step")
+                    break
+
+                parent_screen = nodes_by_uuid.get(parent_uuid)
+                if not parent_screen:
+                    raise RuntimeError("探索栈中的父屏幕不存在")
+
                 await self._log(
                     db,
                     session,
-                    f"「{focus_screen.title}」元素已全部探索，回 Home 后进入子屏幕「{next_focus.title}」",
+                    f"「{focus_screen.title}」子树已完成，回退至「{parent_screen.title}」",
                     step_index=step,
                     log_type="nav",
                 )
                 yield await self._yield_progress(db, session_uuid, "progress")
-                try:
-                    await monkey_screen_manager.navigate_to_child_screen(
-                        db,
-                        session,
-                        step_index=step,
-                        child_screen=next_focus,
-                        nodes_by_uuid=nodes_by_uuid,
-                    )
-                    await self._log(
-                        db,
-                        session,
-                        f"真机已进入子屏幕「{next_focus.title}」",
-                        step_index=step,
-                        log_type="nav",
-                    )
-                except Exception as exc:
-                    await self._log(
-                        db,
-                        session,
-                        f"进入子屏幕失败: {exc}",
-                        step_index=step,
-                        log_type="nav",
-                    )
-                    await monkey_repository.update_session(
-                        db, session, status="failed", error=str(exc), step_count=step
-                    )
-                    yield await self._yield_progress(db, session_uuid, "step")
-                    break
-
-                monkey_screen_manager.save_focus_screen(session, next_focus.node_uuid)
-                await monkey_repository.update_session(
-                    db, session, step_count=step, current_node_uuid=next_focus.node_uuid
-                )
-                await self._log(
+                await monkey_screen_manager.ensure_device_at_screen(
                     db,
                     session,
-                    f"已切换焦点至「{next_focus.title}」，下一步将识别该屏元素",
                     step_index=step,
-                    log_type="nav",
+                    target_screen=parent_screen,
+                    nodes_by_uuid=nodes_by_uuid,
+                )
+                await monkey_repository.update_session(
+                    db, session, step_count=step, current_node_uuid=parent_screen.node_uuid
                 )
                 yield await self._yield_progress(db, session_uuid, "step")
 
@@ -412,6 +453,41 @@ class MonkeyExplorer:
                 message=f"探索结束：{session.status if session else 'unknown'}",
             )
         )
+
+    def _analysis_image(
+        self,
+        session_uuid: str,
+        screen: MonkeyNode,
+        live_bytes: bytes,
+        live_width: int,
+        live_height: int,
+    ) -> tuple[bytes, int, int]:
+        """已固化屏幕始终用原始截图做分析/标注，避免动态界面导致节点消失。"""
+        if monkey_screen_manager.is_screenshot_locked(screen) and screen.screenshot_path:
+            frozen = monkey_repository.load_screenshot_bytes(session_uuid, screen.screenshot_path)
+            return frozen, screen.screen_width or live_width, screen.screen_height or live_height
+        return live_bytes, live_width, live_height
+
+    async def _freeze_screen_snapshot(
+        self,
+        session: MonkeySession,
+        screen: MonkeyNode,
+        image_bytes: bytes,
+        width: int,
+        height: int,
+    ) -> None:
+        if screen.screenshot_path:
+            return
+        shot_name = monkey_repository.save_screenshot_bytes(
+            session.session_uuid,
+            f"screen_{screen.node_uuid[:8]}_base.png",
+            image_bytes,
+        )
+        screen.screenshot_path = shot_name
+        screen.annotated_screenshot_path = shot_name
+        screen.screen_width = width
+        screen.screen_height = height
+        screen.screen_fingerprint = compute_screen_fingerprint(image_bytes)
 
     async def _log(
         self,
@@ -465,9 +541,6 @@ class MonkeyExplorer:
     def _resolve_focus_screen(
         self, session: MonkeySession, nodes_by_uuid: dict[str, MonkeyNode]
     ) -> MonkeyNode | None:
-        if not nodes_by_uuid and session.nodes:
-            nodes_by_uuid = {node.node_uuid: node for node in session.nodes}
-
         focus_uuid = monkey_screen_manager.get_focus_screen_uuid(session)
         focus_screen = nodes_by_uuid.get(focus_uuid or "")
         if focus_screen and focus_screen.node_type == "screen":
@@ -494,6 +567,7 @@ class MonkeyExplorer:
         actions_by_screen: dict[str, list[MonkeyScreenAction]],
         *,
         phase: str,
+        ancestor_actions: list[MonkeyScreenAction] | None = None,
     ) -> dict:
         element_children = [
             {
@@ -508,11 +582,24 @@ class MonkeyExplorer:
             if n.parent_node_uuid == focus_screen.node_uuid and n.node_type == "element"
         ]
         actions = actions_by_screen.get(focus_screen.node_uuid, [])
+        parent_screen = monkey_screen_manager._parent_screen_of(focus_screen, {n.node_uuid: n for n in session.nodes})
+        parent_actions = (
+            actions_by_screen.get(parent_screen.node_uuid, []) if parent_screen else []
+        )
         return {
             "phase": phase,
             "focus_screen_uuid": focus_screen.node_uuid,
             "focus_screen_title": focus_screen.title,
+            "max_depth": session.max_depth,
             "element_children": element_children,
+            "parent_screen_elements": [
+                {"action_no": a.action_no, "element_title": a.element_title}
+                for a in parent_actions
+            ],
+            "ancestor_elements": [
+                {"element_title": a.element_title, "screen_action": a.action_no}
+                for a in (ancestor_actions or [])
+            ],
             "actions": [
                 {
                     "action_no": a.action_no,
@@ -525,7 +612,7 @@ class MonkeyExplorer:
             ],
             "pending_count": len([a for a in actions if a.status == "pending"]),
             "explored_count": len([a for a in actions if a.status == "executed"]),
-            "strategy": "首次进入识别全部元素；逐一操作并回父屏；父屏完成后回 Home 再进子屏",
+            "strategy": "深度优先：执行 #1 并探索完其子树，再执行 #2…；子屏排除与父屏重复元素；截图固化不变",
         }
 
     def _sse(self, event: MonkeyStreamEvent) -> str:

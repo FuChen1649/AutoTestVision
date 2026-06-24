@@ -16,8 +16,10 @@ from app.agent_monkey_service.repository import (
 from app.agent_monkey_service.schemas import BBox, Center
 from app.agent_monkey_service.screenshot_utils import (
     annotate_screen_with_numbers,
+    bbox_overlap_ratio,
     center_from_bbox,
     normalized_bbox_to_pixels,
+    titles_similar,
 )
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.models.monkey import MonkeyNode, MonkeyScreenAction, MonkeySession
@@ -46,7 +48,63 @@ class MonkeyScreenManager:
 
     def get_focus_screen_uuid(self, session: MonkeySession) -> str | None:
         state = self.load_navigation_state(session)
+        stack = state.get("explore_stack") or []
+        if stack:
+            return stack[-1]
         return state.get("focus_screen_uuid") or session.current_node_uuid
+
+    def get_explore_stack(self, session: MonkeySession) -> list[str]:
+        state = self.load_navigation_state(session)
+        return list(state.get("explore_stack") or [])
+
+    def save_explore_stack(self, session: MonkeySession, stack: list[str]) -> None:
+        state = self.load_navigation_state(session)
+        state["explore_stack"] = stack
+        if stack:
+            state["focus_screen_uuid"] = stack[-1]
+        session.navigation_stack_json = json.dumps(state, ensure_ascii=False)
+
+    def push_explore_stack(self, session: MonkeySession, screen_uuid: str) -> None:
+        stack = self.get_explore_stack(session)
+        if stack and stack[-1] == screen_uuid:
+            self.save_focus_screen(session, screen_uuid)
+            return
+        stack.append(screen_uuid)
+        self.save_explore_stack(session, stack)
+
+    def pop_explore_stack(self, session: MonkeySession) -> str | None:
+        stack = self.get_explore_stack(session)
+        if len(stack) <= 1:
+            self.save_explore_stack(session, stack[:1] if stack else [])
+            return stack[0] if stack else None
+        stack.pop()
+        self.save_explore_stack(session, stack)
+        return stack[-1]
+
+    def screen_metadata(self, screen: MonkeyNode) -> dict[str, Any]:
+        if not screen.metadata_json:
+            return {}
+        try:
+            return json.loads(screen.metadata_json)
+        except json.JSONDecodeError:
+            return {}
+
+    def is_discovery_done(self, screen: MonkeyNode) -> bool:
+        return bool(self.screen_metadata(screen).get("discovery_done"))
+
+    def mark_discovery_done(self, screen: MonkeyNode) -> None:
+        meta = self.screen_metadata(screen)
+        meta["discovery_done"] = True
+        screen.metadata_json = json.dumps(meta, ensure_ascii=False)
+
+    def is_screenshot_locked(self, screen: MonkeyNode) -> bool:
+        return bool(self.screen_metadata(screen).get("screenshot_locked"))
+
+    def lock_screen_screenshot(self, screen: MonkeyNode) -> None:
+        meta = self.screen_metadata(screen)
+        meta["screenshot_locked"] = True
+        meta["discovery_done"] = True
+        screen.metadata_json = json.dumps(meta, ensure_ascii=False)
 
     async def bootstrap_home(
         self,
@@ -94,12 +152,23 @@ class MonkeyScreenManager:
             depth=1,
             confidence=1.0,
             description="探索起点",
-            metadata={"replay_script": [{"tool": "go_home", "args": {}}]},
+            metadata={"replay_script": [{"tool": "go_home", "args": {}}], "screenshot_locked": True},
         )
         session.current_node_uuid = home.node_uuid
-        self.save_focus_screen(session, home.node_uuid)
+        self.save_explore_stack(session, [home.node_uuid])
         await monkey_repository.update_session(db, session)
         return root, home
+
+    def find_screen_by_triggered_action(
+        self, nodes_by_uuid: dict[str, MonkeyNode], action_uuid: str
+    ) -> MonkeyNode | None:
+        for node in nodes_by_uuid.values():
+            if node.node_type != "screen":
+                continue
+            meta = self.screen_metadata(node)
+            if meta.get("triggered_by_action_uuid") == action_uuid:
+                return node
+        return None
 
     def find_screen_by_fingerprint(
         self, nodes_by_uuid: dict[str, MonkeyNode], fingerprint: str
@@ -125,9 +194,12 @@ class MonkeyScreenManager:
         nodes_by_uuid: dict[str, MonkeyNode],
         triggered_by_action_uuid: str | None = None,
     ) -> MonkeyNode:
-        existing = self.find_screen_by_fingerprint(nodes_by_uuid, fingerprint)
-        if existing:
-            return existing
+        if triggered_by_action_uuid:
+            existing = self.find_screen_by_triggered_action(
+                nodes_by_uuid, triggered_by_action_uuid
+            )
+            if existing:
+                return existing
 
         image_bytes = decode_data_url(screenshot_data_url)
         shot_name = monkey_repository.save_screenshot_bytes(
@@ -135,7 +207,10 @@ class MonkeyScreenManager:
             f"screen_{uuid.uuid4().hex[:8]}.png",
             image_bytes,
         )
-        metadata: dict[str, Any] = {"replay_script": replay_script}
+        metadata: dict[str, Any] = {
+            "replay_script": replay_script,
+            "screenshot_locked": True,
+        }
         if triggered_by_action_uuid:
             metadata["triggered_by_action_uuid"] = triggered_by_action_uuid
         node = await monkey_repository.add_node(
@@ -298,9 +373,11 @@ class MonkeyScreenManager:
         step_index: int,
         child_screen: MonkeyNode,
         nodes_by_uuid: dict[str, MonkeyNode],
+        from_parent: MonkeyNode | None = None,
     ) -> tuple[bytes, int, int]:
-        """父屏探索完成后：先回 Home，再回放进入子屏幕。"""
-        await self.return_device_to_home(db, session, step_index=step_index)
+        """进入子屏幕：使用子屏完整回放路径（DFS 深度探索）。"""
+        if from_parent and self.is_home_screen(from_parent):
+            await self.return_device_to_home(db, session, step_index=step_index)
         return await self.ensure_device_at_screen(
             db,
             session,
@@ -308,6 +385,129 @@ class MonkeyScreenManager:
             target_screen=child_screen,
             nodes_by_uuid=nodes_by_uuid,
         )
+
+    def collect_ancestor_actions(
+        self,
+        screen: MonkeyNode,
+        nodes_by_uuid: dict[str, MonkeyNode],
+        actions_by_screen: dict[str, list[MonkeyScreenAction]],
+    ) -> list[MonkeyScreenAction]:
+        """收集当前屏幕所有祖先屏幕上的已识别元素，用于去重。"""
+        collected: list[MonkeyScreenAction] = []
+        current: MonkeyNode | None = screen
+        seen: set[str] = set()
+        while current:
+            parent_screen = self._parent_screen_of(current, nodes_by_uuid)
+            if not parent_screen or parent_screen.node_uuid in seen:
+                break
+            seen.add(parent_screen.node_uuid)
+            collected.extend(actions_by_screen.get(parent_screen.node_uuid, []))
+            current = parent_screen
+        return collected
+
+    def filter_duplicate_candidates(
+        self,
+        candidates: list[dict],
+        *,
+        screen_width: int,
+        screen_height: int,
+        existing_actions: list[MonkeyScreenAction],
+        ancestor_actions: list[MonkeyScreenAction],
+    ) -> tuple[list[dict], list[str]]:
+        """与当前屏及祖先屏已有元素比对，排除重复。"""
+        kept: list[dict] = []
+        skipped: list[str] = []
+        reference: list[tuple[str, BBox | None]] = []
+        for action in existing_actions + ancestor_actions:
+            bbox = BBox.model_validate_json(action.bbox_json) if action.bbox_json else None
+            reference.append((action.element_title, bbox))
+
+        for item in candidates:
+            title = str(item.get("element_title") or item.get("title") or "").strip()
+            if not title:
+                continue
+            bbox_norm = item.get("bbox") or {}
+            bbox = normalized_bbox_to_pixels(bbox_norm, screen_width, screen_height)
+            duplicate = False
+            for ref_title, ref_bbox in reference:
+                if titles_similar(title, ref_title):
+                    duplicate = True
+                    break
+                if ref_bbox and bbox_overlap_ratio(ref_bbox, bbox) >= 0.55:
+                    duplicate = True
+                    break
+            if duplicate:
+                skipped.append(title)
+                continue
+            kept.append(item)
+            reference.append((title, bbox))
+        return kept, skipped
+
+    def child_screens_of(
+        self,
+        parent_screen: MonkeyNode,
+        session: MonkeySession,
+        nodes_by_uuid: dict[str, MonkeyNode],
+    ) -> list[MonkeyNode]:
+        children: list[tuple[int, MonkeyNode]] = []
+        for node in session.nodes:
+            if node.node_type != "screen":
+                continue
+            parent_scr = self._parent_screen_of(node, nodes_by_uuid)
+            if not parent_scr or parent_scr.node_uuid != parent_screen.node_uuid:
+                continue
+            element = nodes_by_uuid.get(node.parent_node_uuid or "")
+            action_no = 999
+            if element and element.metadata_json:
+                try:
+                    action_no = int(json.loads(element.metadata_json).get("action_no") or 999)
+                except (TypeError, ValueError):
+                    pass
+            children.append((action_no, node))
+        children.sort(key=lambda item: (item[0], item[1].id))
+        return [item[1] for item in children]
+
+    def screen_subtree_complete(
+        self,
+        screen: MonkeyNode,
+        session: MonkeySession,
+        nodes_by_uuid: dict[str, MonkeyNode],
+        actions_by_screen: dict[str, list[MonkeyScreenAction]],
+    ) -> bool:
+        if not self.is_discovery_done(screen):
+            return False
+        actions = actions_by_screen.get(screen.node_uuid, [])
+        if actions and any(a.status == "pending" for a in actions):
+            return False
+        for child in self.child_screens_of(screen, session, nodes_by_uuid):
+            if child.status in {"discovered", "exploring"}:
+                if not self.screen_subtree_complete(child, session, nodes_by_uuid, actions_by_screen):
+                    return False
+            elif child.status != "explored" and child.status != "skipped":
+                return False
+        return True
+
+    def first_unexplored_child_screen(
+        self,
+        parent_screen: MonkeyNode,
+        session: MonkeySession,
+        nodes_by_uuid: dict[str, MonkeyNode],
+        actions_by_screen: dict[str, list[MonkeyScreenAction]],
+    ) -> MonkeyNode | None:
+        """按 action_no 深度优先：返回第一个尚未完成子树探索的子屏幕。"""
+        for child in self.child_screens_of(parent_screen, session, nodes_by_uuid):
+            if child.status == "skipped":
+                continue
+            if not self.screen_subtree_complete(
+                child, session, nodes_by_uuid, actions_by_screen
+            ):
+                return child
+        return None
+
+    def exceeds_max_depth(self, screen: MonkeyNode, max_depth: int) -> bool:
+        if max_depth <= 0:
+            return False
+        return screen.depth > max_depth
 
     def _parent_screen_fingerprint(
         self, screen: MonkeyNode, nodes_by_uuid: dict[str, MonkeyNode]
@@ -333,12 +533,23 @@ class MonkeyScreenManager:
         replay_script: list[dict[str, Any]],
         actions_by_screen: dict[str, list[MonkeyScreenAction]],
         nodes_by_uuid: dict[str, MonkeyNode],
+        ancestor_actions: list[MonkeyScreenAction] | None = None,
     ) -> list[MonkeyScreenAction]:
-        existing = actions_by_screen.get(screen_node.node_uuid, [])
+        if self.is_discovery_done(screen_node) and actions_by_screen.get(screen_node.node_uuid):
+            return []
+
+        existing = list(actions_by_screen.get(screen_node.node_uuid, []))
+        filtered, skipped = self.filter_duplicate_candidates(
+            candidates,
+            screen_width=screen_width,
+            screen_height=screen_height,
+            existing_actions=existing,
+            ancestor_actions=ancestor_actions or [],
+        )
         next_no = max((a.action_no for a in existing), default=0) + 1
         created: list[MonkeyScreenAction] = []
 
-        for item in candidates[:12]:
+        for item in filtered[:12]:
             title = str(item.get("element_title") or item.get("title") or "").strip()
             if not title:
                 continue
@@ -397,7 +608,19 @@ class MonkeyScreenManager:
         if created:
             screen_node.status = "exploring"
         actions_by_screen[screen_node.node_uuid] = existing
-        return created
+        return created, skipped
+
+    async def finalize_screen_discovery(
+        self,
+        db: AsyncSession,
+        session: MonkeySession,
+        screen_node: MonkeyNode,
+        actions: list[MonkeyScreenAction],
+    ) -> None:
+        """固化屏幕：锁定原始截图，生成标注图，标记发现完成。"""
+        self.mark_discovery_done(screen_node)
+        self.lock_screen_screenshot(screen_node)
+        await self.refresh_screen_annotation(db, session, screen_node, actions)
 
     async def refresh_screen_annotation(
         self,
@@ -419,9 +642,15 @@ class MonkeyScreenManager:
                 center = center_from_bbox(bbox)
             labels.append((bbox, center, str(action.action_no)))
         annotated = annotate_screen_with_numbers(image_bytes, labels)
-        annotated_name = monkey_repository.save_screenshot_bytes(
+        meta = self.screen_metadata(screen_node)
+        annotated_name = meta.get("annotated_screenshot_path")
+        if not annotated_name:
+            annotated_name = f"screen_{screen_node.node_uuid[:8]}_annotated.png"
+            meta["annotated_screenshot_path"] = annotated_name
+            screen_node.metadata_json = json.dumps(meta, ensure_ascii=False)
+        monkey_repository.save_screenshot_bytes(
             session.session_uuid,
-            f"screen_{screen_node.node_uuid[:8]}_annotated.png",
+            annotated_name,
             annotated,
         )
         screen_node.annotated_screenshot_path = annotated_name
@@ -555,12 +784,22 @@ class MonkeyScreenManager:
         self,
         screen_node: MonkeyNode,
         actions_by_screen: dict[str, list[MonkeyScreenAction]],
+        *,
+        session: MonkeySession | None = None,
+        nodes_by_uuid: dict[str, MonkeyNode] | None = None,
     ) -> None:
-        actions = actions_by_screen.get(screen_node.node_uuid, [])
-        if not actions:
-            return
-        if all(a.status in {"executed", "failed", "skipped"} for a in actions):
-            screen_node.status = "explored"
+        if session and nodes_by_uuid:
+            if not self.screen_subtree_complete(
+                screen_node, session, nodes_by_uuid, actions_by_screen
+            ):
+                return
+        else:
+            actions = actions_by_screen.get(screen_node.node_uuid, [])
+            if not actions:
+                return
+            if not all(a.status in {"executed", "failed", "skipped"} for a in actions):
+                return
+        screen_node.status = "explored"
 
 
 monkey_screen_manager = MonkeyScreenManager()
