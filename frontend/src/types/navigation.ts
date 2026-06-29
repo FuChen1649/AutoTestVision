@@ -1,3 +1,5 @@
+import type { AgentRunState } from "./agent";
+
 export type AppPageId =
   | "case-builder"
   | "agent-test-position"
@@ -6,6 +8,17 @@ export type AppPageId =
   | "result"
   | "data-cleaning"
   | "data-flywheel";
+
+export type CaseAgentExecMode = "position" | "code";
+
+/** 从自然语言 Case 保存后跳转到 AgentTest 页时携带的上下文 */
+export interface AgentTestBootstrap {
+  caseId: number;
+  runId: string;
+  mode: CaseAgentExecMode;
+  /** 从 Case 构建页带过来的运行快照，避免 Position 页首屏拉取超大截图 JSON */
+  run?: AgentRunState;
+}
 
 export interface NavItem {
   id: AppPageId;

@@ -5,7 +5,16 @@ interface TreeNode {
   node: MonkeyNode;
   children: TreeNode[];
   actionNo: number | null;
+  revisitTitle: string | null;
 }
+
+const SCREEN_STATUS_LABEL: Record<string, string> = {
+  discovered: "待探索",
+  exploring: "探索中",
+  explored: "已完成",
+  skipped: "已跳过",
+  failed: "失败",
+};
 
 interface MonkeyScreenTreeGalleryProps {
   treeNodes: MonkeyNode[];
@@ -54,13 +63,25 @@ function buildTree(treeNodes: MonkeyNode[], actions: MonkeyScreenAction[]): Tree
     });
   }
 
+  const nodeByUuid = new Map<string, MonkeyNode>();
+  for (const node of treeNodes) nodeByUuid.set(node.node_uuid, node);
+
   const build = (parentUuid: string | null): TreeNode[] =>
     (byParent.get(parentUuid) ?? []).map((node) => {
       let actionNo: number | null = null;
+      let revisitTitle: string | null = null;
       if (node.node_type === "element") {
-        actionNo = actionByElement.get(node.node_uuid)?.action_no ?? null;
+        const action = actionByElement.get(node.node_uuid);
+        actionNo = action?.action_no ?? null;
+        // 引用边：动作指向的结果页面不是本元素的子节点 → 回到了已知页面
+        if (action?.result_screen_uuid) {
+          const target = nodeByUuid.get(action.result_screen_uuid);
+          if (target && target.parent_node_uuid !== node.node_uuid) {
+            revisitTitle = target.title;
+          }
+        }
       } else if (node.node_type === "screen" && node.parent_node_uuid) {
-        const parent = treeNodes.find((n) => n.node_uuid === node.parent_node_uuid);
+        const parent = nodeByUuid.get(node.parent_node_uuid);
         if (parent?.node_type === "element") {
           actionNo = actionByElement.get(parent.node_uuid)?.action_no ?? null;
         } else {
@@ -70,6 +91,7 @@ function buildTree(treeNodes: MonkeyNode[], actions: MonkeyScreenAction[]): Tree
       return {
         node,
         actionNo,
+        revisitTitle,
         children: build(node.node_uuid),
       };
     });
@@ -118,12 +140,16 @@ function TreeNodeCard({
         >
           <span className="monkey-tree-element-no">{item.actionNo ?? "?"}</span>
           <span className="monkey-tree-element-title">{node.title}</span>
+          {item.revisitTitle && (
+            <span className="monkey-tree-revisit-badge" title={`回到已知页面：${item.revisitTitle}`}>
+              ↩ {item.revisitTitle}
+            </span>
+          )}
         </button>
         {item.children.length > 0 && (
           <div className="monkey-tree-children-row">
             {item.children.map((child) => (
               <div key={child.node.node_uuid} className="monkey-tree-child-branch">
-                <div className="monkey-tree-connector" />
                 <TreeNodeCard
                   item={child}
                   actions={actions}
@@ -140,9 +166,16 @@ function TreeNodeCard({
     );
   }
 
+  const statusLabel = isScreen ? SCREEN_STATUS_LABEL[node.status] ?? node.status : null;
+  const isFocus = focusScreenUuid === node.node_uuid;
+
   return (
     <div className="monkey-tree-node-wrap">
-      <div className={`monkey-tree-node-card ${isSelected ? "selected" : ""} ${isRoot ? "root" : ""}`}>
+      <div
+        className={`monkey-tree-node-card status-${node.status} ${isSelected ? "selected" : ""} ${
+          isRoot ? "root" : ""
+        } ${isFocus ? "focus" : ""}`}
+      >
         {isScreen && (
           <button
             type="button"
@@ -156,6 +189,9 @@ function TreeNodeCard({
               <div className="monkey-tree-node-placeholder">无截图</div>
             )}
             <span className="monkey-tree-zoom-hint">点击放大</span>
+            {statusLabel && (
+              <span className={`monkey-tree-status-tag status-${node.status}`}>{statusLabel}</span>
+            )}
           </button>
         )}
         <button
@@ -166,13 +202,13 @@ function TreeNodeCard({
         >
           {isRoot && <span className="monkey-tree-root-icon">根</span>}
           <span className="monkey-tree-node-title">{node.title}</span>
-          {item.actionNo != null && isScreen && node.parent_node_uuid && (
-            <span className="monkey-tree-via-badge">经 #{item.actionNo}</span>
-          )}
-          {pending > 0 && <span className="monkey-tree-pending-badge">{pending} 待探索</span>}
-          {focusScreenUuid === node.node_uuid && (
-            <span className="monkey-tree-exploring-badge">真机探索中</span>
-          )}
+          <span className="monkey-tree-badges">
+            {item.actionNo != null && isScreen && node.parent_node_uuid && (
+              <span className="monkey-tree-via-badge">经 #{item.actionNo}</span>
+            )}
+            {pending > 0 && <span className="monkey-tree-pending-badge">{pending} 待探索</span>}
+            {isFocus && <span className="monkey-tree-exploring-badge">真机探索中</span>}
+          </span>
         </button>
       </div>
 
@@ -180,7 +216,6 @@ function TreeNodeCard({
         <div className="monkey-tree-children-row">
           {item.children.map((child) => (
             <div key={child.node.node_uuid} className="monkey-tree-child-branch">
-              <div className="monkey-tree-connector" />
               <TreeNodeCard
                 item={child}
                 actions={actions}
@@ -227,7 +262,8 @@ export default function MonkeyScreenTreeGallery({
         </div>
       ))}
       <div className="monkey-tree-legend">
-        屏幕节点显示累加标注截图；元素子节点（#1 #2）挂在屏幕下；本屏探索完再展开子屏幕
+        屏幕节点显示标注截图（颜色=状态：蓝探索中 / 绿已完成 / 灰跳过 / 红失败）；元素子节点（#1 #2）挂在屏幕下；
+        元素上的 <span className="monkey-tree-revisit-badge inline">↩</span> 表示该操作回到了已访问页面，不重复展开
       </div>
     </div>
   );

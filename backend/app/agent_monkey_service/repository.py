@@ -385,7 +385,16 @@ class MonkeyRepository:
 
 
 def compute_screen_fingerprint(image_bytes: bytes) -> str:
-    return hashlib.sha256(image_bytes).hexdigest()[:16]
+    """页面指纹：感知哈希（dHash），用汉明距离做相似判定而非精确相等。
+
+    保留对原始字节做 sha256 的精确指纹（exact_fingerprint）以备调试。
+    """
+    from app.agent_monkey_service.screenshot_utils import compute_dhash
+
+    try:
+        return compute_dhash(image_bytes)
+    except Exception:
+        return hashlib.sha256(image_bytes).hexdigest()[:16]
 
 
 def decode_data_url(data_url: str) -> bytes:

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { isApiOfflineError } from "../api/http";
 import { monkeyApi } from "../api/monkey";
@@ -15,7 +15,7 @@ import type {
 } from "../types/monkey";
 import "./AgentMonkeyTestPage.css";
 
-type CollapseKey = "detail" | "ledger" | "logs";
+type CollapseKey = "logs";
 
 const GALLERY_ZOOM_MIN = 0.5;
 const GALLERY_ZOOM_MAX = 2;
@@ -27,19 +27,6 @@ function clampZoom(value: number) {
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
-}
-
-function actionTypeLabel(type: string) {
-  if (type === "long_press") return "长按";
-  if (type === "swipe") return "滑动";
-  return "点击";
-}
-
-function statusLabel(status: string) {
-  if (status === "executed") return "已执行";
-  if (status === "failed") return "失败";
-  if (status === "skipped") return "跳过";
-  return "待执行";
 }
 
 function logTypeLabel(logType: string) {
@@ -85,28 +72,6 @@ export default function AgentMonkeyTestPage() {
   const [galleryZoom, setGalleryZoom] = useState(1);
   const [previewScreen, setPreviewScreen] = useState<MonkeyNode | null>(null);
   const galleryScrollRef = useRef<HTMLDivElement>(null);
-
-  const selectedScreen = useMemo(() => {
-    const found = screens.find((s) => s.node_uuid === selectedScreenUuid);
-    if (found && found.node_type !== "root") return found;
-    return screens.filter((s) => s.node_type !== "root").slice(-1)[0] ?? null;
-  }, [screens, selectedScreenUuid]);
-
-  const screenActions = useMemo(() => {
-    if (!selectedScreen) return [];
-    return actions
-      .filter((a) => a.screen_node_uuid === selectedScreen.node_uuid)
-      .sort((a, b) => a.action_no - b.action_no);
-  }, [actions, selectedScreen]);
-
-  const previewUrl = selectedScreen
-    ? (() => {
-        const raw = selectedScreen.annotated_screenshot_url ?? selectedScreen.screenshot_url ?? null;
-        if (!raw) return null;
-        const sep = raw.includes("?") ? "&" : "?";
-        return `${raw}${sep}t=${encodeURIComponent(selectedScreen.updated_at)}`;
-      })()
-    : null;
 
   const togglePanel = (key: CollapseKey) => {
     setExpanded((current) => {
@@ -430,73 +395,6 @@ export default function AgentMonkeyTestPage() {
             onClose={() => setPreviewScreen(null)}
           />
         )}
-
-        <div className="monkey-collapse-bar">
-          <button
-            type="button"
-            className={`monkey-collapse-toggle ${expanded.has("detail") ? "open" : ""}`}
-            onClick={() => togglePanel("detail")}
-          >
-            {expanded.has("detail") ? "▾" : "▸"} 屏幕详情
-            {selectedScreen ? ` · ${selectedScreen.title}` : ""}
-          </button>
-          {expanded.has("detail") && (
-            <div className="monkey-collapse-body">
-              {previewUrl ? (
-                <img className="monkey-hero-shot" src={previewUrl} alt={selectedScreen?.title ?? "屏幕"} />
-              ) : (
-                <div className="monkey-tree-empty">在树上点击屏幕节点查看标注大图</div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="monkey-collapse-bar">
-          <button
-            type="button"
-            className={`monkey-collapse-toggle ${expanded.has("ledger") ? "open" : ""}`}
-            onClick={() => togglePanel("ledger")}
-          >
-            {expanded.has("ledger") ? "▾" : "▸"} 操作账本
-            {selectedScreen ? ` · ${screenActions.length} 条` : ""}
-          </button>
-          {expanded.has("ledger") && (
-            <div className="monkey-collapse-body">
-              {screenActions.length === 0 ? (
-                <div className="monkey-tree-empty">该屏幕暂无编号操作</div>
-              ) : (
-                <table className="monkey-ledger-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>元素</th>
-                      <th>动作</th>
-                      <th>数据依赖</th>
-                      <th>状态</th>
-                      <th>结果屏幕</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {screenActions.map((action) => (
-                      <tr key={action.action_uuid} className={`status-${action.status}`}>
-                        <td>{action.action_no}</td>
-                        <td>{action.element_title}</td>
-                        <td>{actionTypeLabel(action.action_type)}</td>
-                        <td>{action.data_dependency || "无"}</td>
-                        <td>{statusLabel(action.status)}</td>
-                        <td>
-                          {action.result_screen_uuid
-                            ? screens.find((s) => s.node_uuid === action.result_screen_uuid)?.title ?? "已跳转"
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-        </div>
 
         <div className="monkey-collapse-bar">
           <button

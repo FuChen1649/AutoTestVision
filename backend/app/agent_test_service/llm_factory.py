@@ -168,6 +168,7 @@ class LLMFactory:
                 base_url=settings.agent_llm_base_url or None,
                 model=model,
                 temperature=0,
+                verbose=False,
             )
         else:  # local
             client = ChatOpenAI(
@@ -175,6 +176,7 @@ class LLMFactory:
                 base_url=settings.agent_local_base_url,
                 model=model,
                 temperature=0,
+                verbose=False,
             )
 
         self._cache[cache_key] = client

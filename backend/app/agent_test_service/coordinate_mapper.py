@@ -13,7 +13,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Qwen-VL / Gemma 3·4 等视觉 grounding 普遍输出 0-1000 相对坐标（相对截图宽高）
+# Qwen-VL / Gemma / 智谱 GLM-V 等视觉 grounding 输出 0-1000 相对坐标
 _NORMALIZED_1000_MODEL_MARKERS = (
     "qwen3",
     "qwen2.5",
@@ -24,6 +24,11 @@ _NORMALIZED_1000_MODEL_MARKERS = (
     "gemma4",
     "gemma-3",
     "gemma-4",
+    "glm",
+    "glm-4",
+    "glm-4v",
+    "glm-4.6",
+    "chatglm",
 )
 
 

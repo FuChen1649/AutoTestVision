@@ -138,11 +138,13 @@ class AgentTestService:
                     break
         return ProvidersResponse(providers=infos, default=resolved_default)
 
-    async def get_run(self, run_uuid: str, db: AsyncSession) -> RunStateResponse | None:
+    async def get_run(
+        self, run_uuid: str, db: AsyncSession, *, include_images: bool = True
+    ) -> RunStateResponse | None:
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         if not run:
             return None
-        return agent_repository.to_response(run)
+        return agent_repository.to_response(run, include_images=include_images)
 
     async def get_logs(
         self, run_uuid: str, db: AsyncSession, agent_type: str | None = None
@@ -160,23 +162,54 @@ class AgentTestService:
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         if not run:
             raise RuntimeError("运行实例不存在")
-        if run.status in {"completed", "failed", "cancelled"}:
+        if run.status in {"failed", "cancelled"}:
             return StepAdvanceResponse(
                 run=agent_repository.to_response(run),
                 finished=True,
-                message="运行已结束",
+                message=f"运行状态：{run.status}",
             )
+        if run.status == "completed":
+            if run.current_step_index < run.total_steps:
+                await agent_repository.update_run_fields(db, run, status="pending")
+                await agent_repository.commit(db)
+                run = await agent_repository.get_run_by_uuid(db, run_uuid)
+                assert run is not None
+            else:
+                return StepAdvanceResponse(
+                    run=agent_repository.to_response(run),
+                    finished=True,
+                    message="运行已结束",
+                )
 
         state = self._to_harness_state(run)
+        start_index = state.get("current_step_index", 0)
         state["status"] = "running"
         await agent_repository.update_run_fields(db, run, status="running")
         await self._recover_scene_before_run(db, run)
         await agent_repository.commit(db)
 
-        result = await harness_graph.ainvoke(state, config=harness_run_config(state))
-        await self._sync_state_to_db(db, run_uuid, result)
+        config = harness_run_config(state)
+        async for event in harness_graph.astream(state, stream_mode="updates", config=config):
+            for node_name, update in event.items():
+                state = self._merge_state(state, update)
+                await self._persist_node_update(db, run_uuid, node_name, state)
+            run = await agent_repository.get_run_by_uuid(db, run_uuid)
+            if not run:
+                break
+            if run.status in {"failed", "cancelled"}:
+                break
+            if run.current_step_index > start_index:
+                break
+            if run.status == "completed":
+                break
+
         run = await agent_repository.get_run_by_uuid(db, run_uuid)
         assert run is not None
+        if run.status == "running" and run.current_step_index >= run.total_steps:
+            await agent_repository.update_run_fields(db, run, status="completed")
+            await agent_repository.commit(db)
+            run = await agent_repository.get_run_by_uuid(db, run_uuid)
+            assert run is not None
         finished = run.status in {"completed", "failed", "cancelled"}
         return StepAdvanceResponse(
             run=agent_repository.to_response(run),
@@ -979,6 +1012,14 @@ class AgentTestService:
                 run,
                 "executor",
                 f"执行操作：{step_record.intent.action}",
+                step_order=step_record.step_order,
+                detail=step_record.intent.model_dump(),
+            )
+            await agent_repository.add_log(
+                db,
+                run,
+                "intent",
+                "坐标精修完成",
                 step_order=step_record.step_order,
                 detail=step_record.intent.model_dump(),
             )

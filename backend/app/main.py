@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import agent_monkey, agent_test, agent_test_code, cases, device, flywheel, result_verify
+from app.api import agent_monkey, agent_test, agent_test_code, case_live, cases, device, flywheel, result_verify
 from app.config import settings
 from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
@@ -57,6 +57,7 @@ app.add_middleware(
 )
 
 app.include_router(cases.router, prefix="/api")
+app.include_router(case_live.router, prefix="/api")
 app.include_router(device.router, prefix="/api")
 app.include_router(agent_test.router, prefix="/api")
 app.include_router(agent_test_code.router, prefix="/api")

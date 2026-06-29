@@ -20,7 +20,7 @@ class Center(BaseModel):
     y: int
 
 
-ActionStatus = Literal["pending", "executed", "failed", "skipped"]
+ActionStatus = Literal["pending", "executed", "failed", "skipped", "no_effect"]
 
 
 class MonkeyScreenActionResponse(BaseModel):

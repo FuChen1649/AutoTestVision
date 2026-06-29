@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PERMISSION_PRESET_LABEL, PERMISSION_PRESET_STEP_TYPE } from "../constants/case";
+import type { CaseAgentExecMode } from "../types/navigation";
 import type { CaseStep, StepScreenBinding } from "../types";
 import StepScreenCaptureModal from "./StepScreenCaptureModal";
 
@@ -11,8 +12,12 @@ interface CaseBuilderProps {
   caseName: string;
   steps: CaseStep[];
   saving: boolean;
+  stepExecuting: boolean;
+  agentMode: CaseAgentExecMode;
+  liveStatus: string | null;
   selectedSerial: string | null;
   onCaseNameChange: (name: string) => void;
+  onAgentModeChange: (mode: CaseAgentExecMode) => void;
   onStepChange: (index: number, description: string) => void;
   onStepScreenBind: (index: number, binding: StepScreenBinding) => void;
   onAddStep: () => void;
@@ -24,8 +29,12 @@ export default function CaseBuilder({
   caseName,
   steps,
   saving,
+  stepExecuting,
+  agentMode,
+  liveStatus,
   selectedSerial,
   onCaseNameChange,
+  onAgentModeChange,
   onStepChange,
   onStepScreenBind,
   onAddStep,
@@ -41,10 +50,27 @@ export default function CaseBuilder({
           <h2>自然语言 Case</h2>
           <span className="panel-hint">单步描述：action + position + color? + text/shape/icon</span>
         </div>
-        <button className="primary-btn" onClick={onSave} disabled={saving}>
-          {saving ? "保存中..." : "保存 Case"}
-        </button>
+        <div className="case-header-actions">
+          <label className="exec-mode-label">
+            <span className="exec-mode-label-text">执行</span>
+            <select
+              className="exec-mode-select"
+              value={agentMode}
+              disabled={stepExecuting || saving}
+              onChange={(event) => onAgentModeChange(event.target.value as CaseAgentExecMode)}
+              title="添加步骤时同步执行 AgentTest"
+            >
+              <option value="position">Position</option>
+              <option value="code">Code</option>
+            </select>
+          </label>
+          <button className="primary-btn" onClick={onSave} disabled={saving || stepExecuting}>
+            {saving ? "保存中..." : "保存 Case"}
+          </button>
+        </div>
       </header>
+
+      {liveStatus && <div className="case-live-status">{liveStatus}</div>}
 
       <div className="panel-body case-body">
         <label className="field-label">
@@ -116,9 +142,9 @@ export default function CaseBuilder({
           })}
         </div>
 
-        <button className="add-step-btn" onClick={onAddStep} type="button">
+        <button className="add-step-btn" onClick={onAddStep} type="button" disabled={stepExecuting || saving}>
           <span className="add-icon">+</span>
-          添加步骤
+          {stepExecuting ? "执行中…" : "添加步骤"}
         </button>
       </div>
 

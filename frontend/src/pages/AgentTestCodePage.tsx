@@ -4,10 +4,16 @@ import { isApiOfflineError } from "../api/http";
 import AgentExecutionGallery from "../components/AgentExecutionGallery";
 import type { CaseListItem, ProviderInfo } from "../types/agent";
 import type { CodeRunState } from "../types/agentCode";
+import type { AgentTestBootstrap } from "../types/navigation";
 import { codeRunToGalleryRun } from "../types/agentCode";
 import "./AgentTestPage.css";
 
-export default function AgentTestCodePage() {
+interface AgentTestCodePageProps {
+  bootstrap?: AgentTestBootstrap | null;
+  onBootstrapConsumed?: () => void;
+}
+
+export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed }: AgentTestCodePageProps) {
   const stopStreamRef = useRef<(() => void) | null>(null);
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
@@ -117,6 +123,33 @@ export default function AgentTestCodePage() {
     void loadProviders();
     return () => stopStreamRef.current?.();
   }, [loadCases, loadProviders]);
+
+  useEffect(() => {
+    if (!bootstrap?.runId) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await agentCodeApi.listCases(10);
+        if (cancelled) return;
+        setCases(list);
+        setSelectedCaseId(bootstrap.caseId);
+        const runState = await agentCodeApi.getRun(bootstrap.runId);
+        if (cancelled) return;
+        setRun(runState);
+      } catch (err) {
+        if (!cancelled && !isApiOfflineError(err)) {
+          setError(err instanceof Error ? err.message : "加载执行记录失败");
+        }
+      } finally {
+        onBootstrapConsumed?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bootstrap, onBootstrapConsumed]);
 
   const handleStart = async () => {
     if (!selectedCaseId || running || batchRunning) return;

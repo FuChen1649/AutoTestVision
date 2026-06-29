@@ -19,6 +19,8 @@ from app.agent_monkey_service.screenshot_utils import (
     bbox_overlap_ratio,
     center_from_bbox,
     normalized_bbox_to_pixels,
+    parse_candidate_bbox,
+    perceptual_similar,
     titles_similar,
 )
 from app.agent_test_service.agent_logger import get_agent_logger
@@ -95,6 +97,12 @@ class MonkeyScreenManager:
     def mark_discovery_done(self, screen: MonkeyNode) -> None:
         meta = self.screen_metadata(screen)
         meta["discovery_done"] = True
+        screen.metadata_json = json.dumps(meta, ensure_ascii=False)
+
+    def reset_discovery(self, screen: MonkeyNode) -> None:
+        """允许重新调用模型定位元素（如主屏启动应用坐标不准）。"""
+        meta = self.screen_metadata(screen)
+        meta["discovery_done"] = False
         screen.metadata_json = json.dumps(meta, ensure_ascii=False)
 
     def is_screenshot_locked(self, screen: MonkeyNode) -> bool:
@@ -177,6 +185,41 @@ class MonkeyScreenManager:
             if node.node_type == "screen" and node.screen_fingerprint == fingerprint:
                 return node
         return None
+
+    def find_state_by_fingerprint(
+        self,
+        nodes_by_uuid: dict[str, MonkeyNode],
+        fingerprint: str | None,
+        *,
+        exclude_uuid: str | None = None,
+        threshold: int = 8,
+    ) -> MonkeyNode | None:
+        """用感知指纹（汉明距离）在已发现屏幕中找“同一页面”，找最相近的一个。"""
+        if not fingerprint:
+            return None
+        best: MonkeyNode | None = None
+        best_dist = threshold + 1
+        from app.agent_monkey_service.screenshot_utils import hamming_distance
+
+        for node in nodes_by_uuid.values():
+            if node.node_type != "screen" or node.node_uuid == exclude_uuid:
+                continue
+            if not node.screen_fingerprint:
+                continue
+            dist = hamming_distance(fingerprint, node.screen_fingerprint)
+            if dist <= threshold and dist < best_dist:
+                best, best_dist = node, dist
+        return best
+
+    def known_screen_titles(self, nodes_by_uuid: dict[str, MonkeyNode]) -> list[str]:
+        return [
+            n.title
+            for n in nodes_by_uuid.values()
+            if n.node_type == "screen" and self.is_discovery_done(n)
+        ]
+
+    def fingerprints_match(self, a: str | None, b: str | None, *, threshold: int = 8) -> bool:
+        return perceptual_similar(a, b, threshold=threshold)
 
     async def ensure_screen_node(
         self,
@@ -297,6 +340,44 @@ class MonkeyScreenManager:
             nodes_by_uuid=nodes_by_uuid,
         )
 
+    async def return_to_parent_via_back(
+        self,
+        db: AsyncSession,
+        session: MonkeySession,
+        *,
+        step_index: int,
+        parent_screen: MonkeyNode,
+        nodes_by_uuid: dict[str, MonkeyNode],
+    ) -> tuple[bytes, int, int]:
+        """回退到父屏：优先按一次系统返回键（快），校验指纹；不符再回退到整条重放。"""
+        if self.is_home_screen(parent_screen):
+            return await self.return_device_to_home(db, session, step_index=step_index)
+
+        await asyncio.to_thread(adb_service.press_back_key, session.serial, times=1)
+        await asyncio.sleep(1.2)
+        await monkey_repository.add_action(
+            db, session, step_index=step_index, tool_name="go_back", title="返回上一屏", result="ok"
+        )
+        image_bytes = await adb_service.capture_screen(serial=session.serial)
+        width, height = adb_service.get_image_size(image_bytes)
+        actual_fp = compute_screen_fingerprint(image_bytes)
+        if not parent_screen.screen_fingerprint or self.fingerprints_match(
+            actual_fp, parent_screen.screen_fingerprint
+        ):
+            parent_screen.status = "exploring"
+            return image_bytes, width, height
+
+        logger.info(
+            "[monkey] back 键未回到「%s」，改用完整重放路径", parent_screen.title
+        )
+        return await self.ensure_device_at_screen(
+            db,
+            session,
+            step_index=step_index,
+            target_screen=parent_screen,
+            nodes_by_uuid=nodes_by_uuid,
+        )
+
     async def ensure_device_at_screen(
         self,
         db: AsyncSession,
@@ -342,10 +423,10 @@ class MonkeyScreenManager:
             width, height = adb_service.get_image_size(image_bytes)
             actual_fp = compute_screen_fingerprint(image_bytes)
 
-            if not expected_fp or actual_fp == expected_fp:
+            if not expected_fp or self.fingerprints_match(actual_fp, expected_fp):
                 target_screen.status = "exploring"
                 return image_bytes, width, height
-            if parent_fp and actual_fp != parent_fp:
+            if parent_fp and not self.fingerprints_match(actual_fp, parent_fp):
                 logger.warning(
                     "[monkey] 屏幕「%s」指纹与快照不完全一致，但已离开父屏幕，继续探索",
                     target_screen.title,
@@ -405,6 +486,46 @@ class MonkeyScreenManager:
             current = parent_screen
         return collected
 
+    def filter_launcher_candidates(
+        self, candidates: list[dict], target_app_name: str
+    ) -> list[dict]:
+        """主屏幕只保留目标应用图标，丢弃其他桌面元素。"""
+        target = (target_app_name or "").strip()
+        if not target or not candidates:
+            return candidates
+        matched: list[dict] = []
+        for item in candidates:
+            title = str(item.get("element_title") or item.get("title") or "").strip()
+            if self._title_matches_target(title, target):
+                matched.append({**item, "element_title": target})
+        if matched:
+            return matched[:1]
+        if len(candidates) == 1:
+            return [{**candidates[0], "element_title": target}]
+        return []
+
+    @staticmethod
+    def _title_matches_target(title: str, target: str) -> bool:
+        left = (title or "").strip().lower()
+        right = (target or "").strip().lower()
+        if not left or not right:
+            return False
+        if left == right or left in right or right in left:
+            return True
+        alias_groups = [
+            ("电话", "phone", "dialer", "拨号"),
+            ("微信", "wechat"),
+            ("相机", "camera"),
+            ("设置", "settings"),
+            ("短信", "messages", "message"),
+            ("浏览器", "chrome", "browser"),
+        ]
+        for group in alias_groups:
+            if any(g in right for g in group):
+                if any(g in left for g in group):
+                    return True
+        return False
+
     def filter_duplicate_candidates(
         self,
         candidates: list[dict],
@@ -426,8 +547,13 @@ class MonkeyScreenManager:
             title = str(item.get("element_title") or item.get("title") or "").strip()
             if not title:
                 continue
-            bbox_norm = item.get("bbox") or {}
-            bbox = normalized_bbox_to_pixels(bbox_norm, screen_width, screen_height)
+            bbox = parse_candidate_bbox(
+                item.get("bbox") or item.get("box_2d") or item.get("box"),
+                screen_width,
+                screen_height,
+            )
+            if not bbox:
+                continue
             duplicate = False
             for ref_title, ref_bbox in reference:
                 if titles_similar(title, ref_title):
@@ -477,7 +603,9 @@ class MonkeyScreenManager:
         if not self.is_discovery_done(screen):
             return False
         actions = actions_by_screen.get(screen.node_uuid, [])
-        if actions and any(a.status == "pending" for a in actions):
+        if not actions:
+            return False
+        if any(a.status == "pending" for a in actions):
             return False
         for child in self.child_screens_of(screen, session, nodes_by_uuid):
             if child.status in {"discovered", "exploring"}:
@@ -549,15 +677,34 @@ class MonkeyScreenManager:
         next_no = max((a.action_no for a in existing), default=0) + 1
         created: list[MonkeyScreenAction] = []
 
-        for item in filtered[:12]:
+        for item in filtered[:20]:
             title = str(item.get("element_title") or item.get("title") or "").strip()
             if not title:
                 continue
             if any(a.element_title == title and a.status != "failed" for a in existing):
                 continue
-            bbox_norm = item.get("bbox") or {}
-            bbox = normalized_bbox_to_pixels(bbox_norm, screen_width, screen_height)
+            bbox = parse_candidate_bbox(
+                item.get("bbox") or item.get("box_2d") or item.get("box"),
+                screen_width,
+                screen_height,
+            )
+            if not bbox or bbox.w < 8 or bbox.h < 8:
+                skipped.append(title)
+                continue
+            if bbox.x < 0 or bbox.y < 0 or bbox.x + bbox.w > screen_width + 4 or bbox.y + bbox.h > screen_height + 4:
+                skipped.append(f"{title}(坐标越界)")
+                continue
             center = center_from_bbox(bbox)
+            logger.info(
+                "[monkey] 元素「%s」bbox_raw=%s → 像素 bbox=%s center=(%s,%s) 屏 %sx%s",
+                title,
+                item.get("bbox") or item.get("box_2d") or item.get("box"),
+                bbox.model_dump(),
+                center.x,
+                center.y,
+                screen_width,
+                screen_height,
+            )
             swipe_to = None
             if item.get("swipe_to"):
                 swipe_to = normalized_bbox_to_pixels(item["swipe_to"], screen_width, screen_height)
@@ -634,13 +781,13 @@ class MonkeyScreenManager:
         image_bytes = monkey_repository.load_screenshot_bytes(
             session.session_uuid, screen_node.screenshot_path
         )
-        labels: list[tuple[BBox | None, Center | None, str]] = []
+        labels: list[tuple[BBox | None, Center | None, str, str | None]] = []
         for action in sorted(actions, key=lambda item: item.action_no):
             bbox = BBox.model_validate_json(action.bbox_json) if action.bbox_json else None
             center = Center.model_validate_json(action.center_json) if action.center_json else None
             if not center and bbox:
                 center = center_from_bbox(bbox)
-            labels.append((bbox, center, str(action.action_no)))
+            labels.append((bbox, center, str(action.action_no), action.status))
         annotated = annotate_screen_with_numbers(image_bytes, labels)
         meta = self.screen_metadata(screen_node)
         annotated_name = meta.get("annotated_screenshot_path")
@@ -668,6 +815,16 @@ class MonkeyScreenManager:
         if action.replay_script_json:
             return json.loads(action.replay_script_json)
         return self.screen_replay_script(screen_node)
+
+    def action_extra_scroll_steps(
+        self, screen_node: MonkeyNode, action: MonkeyScreenAction
+    ) -> list[dict[str, Any]]:
+        """元素若是滚动后才发现的，其回放路径比屏幕基础路径多出滚动步骤，执行前需先回放这些滚动。"""
+        base = self.screen_replay_script(screen_node)
+        full = self.build_replay_for_action(screen_node, action)
+        if len(full) > len(base):
+            return full[len(base):]
+        return []
 
     def actions_for_screen(self, session: MonkeySession, screen_uuid: str) -> list[MonkeyScreenAction]:
         return sorted(
@@ -707,7 +864,7 @@ class MonkeyScreenManager:
         actions = actions_by_screen.get(screen.node_uuid, [])
         if not actions:
             return False
-        return all(a.status in {"executed", "failed", "skipped"} for a in actions)
+        return all(a.status in {"executed", "failed", "skipped", "no_effect"} for a in actions)
 
     def pick_next_child_screen(
         self,
@@ -797,7 +954,9 @@ class MonkeyScreenManager:
             actions = actions_by_screen.get(screen_node.node_uuid, [])
             if not actions:
                 return
-            if not all(a.status in {"executed", "failed", "skipped"} for a in actions):
+            if not all(
+                a.status in {"executed", "failed", "skipped", "no_effect"} for a in actions
+            ):
                 return
         screen_node.status = "explored"
 

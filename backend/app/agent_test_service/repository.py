@@ -195,7 +195,7 @@ class AgentRepository:
             return []
         return list(getattr(obj, name))
 
-    def _attempts_to_records(self, run: AgentRun) -> list[StepAttemptRecord]:
+    def _attempts_to_records(self, run: AgentRun, *, include_images: bool = True) -> list[StepAttemptRecord]:
         step_by_order = {item.step_order: item for item in self._loaded_relationship(run, "steps")}
 
         def enrich(item: AgentRunStepAttempt) -> StepAttemptRecord:
@@ -206,9 +206,9 @@ class AgentRepository:
             return StepAttemptRecord(
                 step_order=item.step_order,
                 attempt_index=item.attempt_index,
-                before_image=item.before_image,
-                before_image_annotated=item.before_image_annotated,
-                after_image=item.after_image,
+                before_image=item.before_image if include_images else None,
+                before_image_annotated=item.before_image_annotated if include_images else None,
+                after_image=item.after_image if include_images else None,
                 status=item.status,
                 error=item.error,
                 step_type=step_type,
@@ -223,6 +223,10 @@ class AgentRepository:
                 key=lambda row: (row.step_order, row.attempt_index),
             )
         ]
+        if records and all(
+            not (r.before_image or r.before_image_annotated or r.after_image) for r in records
+        ):
+            records = []
         if records:
             return records
 
@@ -236,9 +240,9 @@ class AgentRepository:
                 StepAttemptRecord(
                     step_order=step.step_order,
                     attempt_index=0,
-                    before_image=step.before_image,
-                    before_image_annotated=step.before_image_annotated,
-                    after_image=step.after_image,
+                    before_image=step.before_image if include_images else None,
+                    before_image_annotated=step.before_image_annotated if include_images else None,
+                    after_image=step.after_image if include_images else None,
                     status=step.status if step.status in {"success", "failed"} else "running",
                     error=step.error,
                     step_type=step_type,
@@ -248,7 +252,7 @@ class AgentRepository:
             )
         return fallback
 
-    def to_response(self, run: AgentRun) -> RunStateResponse:
+    def to_response(self, run: AgentRun, *, include_images: bool = True) -> RunStateResponse:
         steps: list[StepExecutionRecord] = []
         for step in sorted(self._loaded_relationship(run, "steps"), key=lambda item: item.step_order):
             intent = None
@@ -271,10 +275,10 @@ class AgentRepository:
                     status=step.status,
                     intent=intent,
                     verification=verification,
-                    before_image=step.before_image,
-                    before_image_annotated=step.before_image_annotated,
-                    after_image=step.after_image,
-                    reference_image=step.reference_image,
+                    before_image=step.before_image if include_images else None,
+                    before_image_annotated=step.before_image_annotated if include_images else None,
+                    after_image=step.after_image if include_images else None,
+                    reference_image=step.reference_image if include_images else None,
                     reference_x=step.reference_x,
                     reference_y=step.reference_y,
                     reference_width=step.reference_width,
@@ -299,7 +303,7 @@ class AgentRepository:
             llm_provider=run.llm_provider,
             enable_verifier=bool(getattr(run, "enable_verifier", False)),
             steps=steps,
-            attempts=self._attempts_to_records(run),
+            attempts=self._attempts_to_records(run, include_images=include_images),
             created_at=run.created_at,
             updated_at=run.updated_at,
         )

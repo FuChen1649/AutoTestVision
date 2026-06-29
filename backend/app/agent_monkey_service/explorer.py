@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent_monkey_service.launcher_locator import find_launcher_icon
 from app.agent_monkey_service.navigation_tools import monkey_navigation_tools
 from app.agent_monkey_service.repository import (
     compute_screen_fingerprint,
@@ -25,6 +26,28 @@ logger = get_agent_logger()
 
 
 class MonkeyExplorer:
+    MAX_DISCOVERY_SCROLLS = 3
+
+    def _scroll_down_step(self, width: int, height: int) -> dict:
+        """生成一个“向下滚动”的回放步骤（手指上滑，内容下移）。"""
+        x = max(1, width // 2)
+        return {
+            "tool": "swipe",
+            "args": {
+                "x1": x,
+                "y1": int(height * 0.72),
+                "x2": x,
+                "y2": int(height * 0.30),
+                "title": "向下滚动",
+            },
+        }
+
+    async def _scroll_down(self, session: MonkeySession, width: int, height: int) -> None:
+        x = max(1, width // 2)
+        await adb_service.swipe(
+            x, int(height * 0.72), x, int(height * 0.30), serial=session.serial
+        )
+
     async def explore(self, db: AsyncSession, session_uuid: str) -> AsyncGenerator[str, None]:
         session = await monkey_repository.get_session(db, session_uuid)
         if not session:
@@ -123,81 +146,167 @@ class MonkeyExplorer:
                 screen_actions = actions_by_screen.get(focus_screen.node_uuid, [])
                 pending_actions = [a for a in screen_actions if a.status == "pending"]
 
-                # --- 阶段 A：首次进入屏幕，模型识别全部相关元素（仅一次，截图固化） ---
+                async def model_progress(message: str, log_type: str) -> None:
+                    await self._log(
+                        db,
+                        session,
+                        message,
+                        step_index=step,
+                        log_type=log_type,
+                    )
+
+                # --- 阶段 A：首次进入屏幕，识别可探索元素（Home 仅定位目标应用图标） ---
                 if not monkey_screen_manager.is_discovery_done(focus_screen):
                     ancestor_actions = monkey_screen_manager.collect_ancestor_actions(
                         focus_screen, nodes_by_uuid, actions_by_screen
                     )
-                    explore_state = self._build_explore_state(
-                        session,
-                        focus_screen,
-                        actions_by_screen,
-                        phase="discover",
-                        ancestor_actions=ancestor_actions,
-                    )
+                    on_home = monkey_screen_manager.is_home_screen(focus_screen)
+                    phase_label = "定位目标应用" if on_home else "识别元素"
                     await self._log(
                         db,
                         session,
-                        f"步骤 {step}：首次进入「{focus_screen.title}」，调用模型识别元素（{llm_factory.describe(session.llm_provider)}）",
+                        f"步骤 {step}：首次进入「{focus_screen.title}」，{phase_label}（{llm_factory.describe(session.llm_provider)}）",
                         step_index=step,
                         log_type="model",
                     )
                     yield await self._yield_progress(db, session_uuid, "progress")
 
-                    async def model_progress(message: str, log_type: str) -> None:
-                        await self._log(
+                    base_script = monkey_screen_manager.screen_replay_script(focus_screen)
+                    prev_fp = compute_screen_fingerprint(image_bytes)
+                    total_new = 0
+                    total_skipped = 0
+                    max_scroll_passes = 0 if on_home else self.MAX_DISCOVERY_SCROLLS
+                    for scroll_idx in range(max_scroll_passes + 1):
+                        if on_home:
+                            ui_hit = await find_launcher_icon(
+                                session.serial, session.target_app_name
+                            )
+                            if ui_hit:
+                                bbox, center, label = ui_hit
+                                await self._log(
+                                    db,
+                                    session,
+                                    (
+                                        f"主屏 UI 层级定位「{session.target_app_name}」"
+                                        f"（{label}）中心 ({center.x},{center.y})，跳过视觉模型"
+                                    ),
+                                    step_index=step,
+                                    log_type="model",
+                                )
+                                analysis = {
+                                    "screen_title": "主屏幕",
+                                    "candidates": [
+                                        {
+                                            "element_title": session.target_app_name,
+                                            "suggested_action": "tap",
+                                            "bbox": [bbox.x, bbox.y, bbox.x + bbox.w, bbox.y + bbox.h],
+                                            "data_dependency": "无",
+                                            "reasoning": f"uiautomator 定位: {label}",
+                                        }
+                                    ],
+                                }
+                            else:
+                                await self._log(
+                                    db,
+                                    session,
+                                    "UI 层级未找到图标，回退视觉模型定位",
+                                    step_index=step,
+                                    log_type="model",
+                                )
+                                analysis = await monkey_screen_analyzer.discover_home_launcher(
+                                    provider=session.llm_provider,
+                                    target_app_name=session.target_app_name,
+                                    step_index=step,
+                                    max_steps=max_steps,
+                                    screenshot_data_url=data_url,
+                                    screen_width=width,
+                                    screen_height=height,
+                                    on_progress=model_progress,
+                                )
+                        else:
+                            explore_state = self._build_explore_state(
+                                session,
+                                focus_screen,
+                                actions_by_screen,
+                                phase="discover",
+                                ancestor_actions=ancestor_actions,
+                            )
+                            analysis = await monkey_screen_analyzer.discover_screen(
+                                provider=session.llm_provider,
+                                target_app_name=session.target_app_name,
+                                step_index=step,
+                                max_steps=max_steps,
+                                explore_state=explore_state,
+                                screenshot_data_url=data_url,
+                                screen_width=width,
+                                screen_height=height,
+                                on_progress=model_progress,
+                            )
+                        yield await self._yield_progress(db, session_uuid, "progress")
+
+                        if (
+                            scroll_idx == 0
+                            and analysis.get("screen_title")
+                            and not monkey_screen_manager.is_screenshot_locked(focus_screen)
+                            and not on_home
+                        ):
+                            focus_screen.title = str(analysis["screen_title"])[:120]
+                        if scroll_idx == 0 and not focus_screen.screenshot_path:
+                            await self._freeze_screen_snapshot(
+                                session, focus_screen, image_bytes, width, height
+                            )
+
+                        candidates = analysis.get("candidates") or []
+                        if on_home:
+                            candidates = monkey_screen_manager.filter_launcher_candidates(
+                                candidates, session.target_app_name
+                            )
+
+                        scroll_script = base_script + [
+                            self._scroll_down_step(width, height)
+                        ] * scroll_idx
+                        new_actions, skipped = await monkey_screen_manager.upsert_discovered_actions(
                             db,
                             session,
-                            message,
-                            step_index=step,
-                            log_type=log_type,
+                            screen_node=focus_screen,
+                            candidates=candidates,
+                            screen_width=width,
+                            screen_height=height,
+                            replay_script=scroll_script,
+                            actions_by_screen=actions_by_screen,
+                            nodes_by_uuid=nodes_by_uuid,
+                            ancestor_actions=ancestor_actions,
                         )
+                        total_new += len(new_actions)
+                        total_skipped += len(skipped)
 
-                    analysis = await monkey_screen_analyzer.discover_screen(
-                        provider=session.llm_provider,
-                        target_app_name=session.target_app_name,
-                        step_index=step,
-                        max_steps=max_steps,
-                        explore_state=explore_state,
-                        screenshot_data_url=data_url,
-                        screen_width=width,
-                        screen_height=height,
-                        on_progress=model_progress,
-                    )
-                    yield await self._yield_progress(db, session_uuid, "progress")
-
-                    if analysis.get("screen_title") and not monkey_screen_manager.is_screenshot_locked(
-                        focus_screen
-                    ):
-                        focus_screen.title = str(analysis["screen_title"])[:120]
-
-                    if not focus_screen.screenshot_path:
-                        await self._freeze_screen_snapshot(
-                            session, focus_screen, image_bytes, width, height
+                        scrollable = bool(analysis.get("scrollable")) and not bool(
+                            analysis.get("reached_bottom")
                         )
+                        if not scrollable or scroll_idx >= self.MAX_DISCOVERY_SCROLLS:
+                            break
+                        await self._log(
+                            db, session, "页面可滚动，向下滚动继续发现元素", step_index=step, log_type="nav"
+                        )
+                        await self._scroll_down(session, width, height)
+                        await asyncio.sleep(0.8)
+                        image_bytes = await adb_service.capture_screen(serial=session.serial)
+                        width, height = adb_service.get_image_size(image_bytes)
+                        data_url = bytes_to_data_url(image_bytes)
+                        new_fp = compute_screen_fingerprint(image_bytes)
+                        if monkey_screen_manager.fingerprints_match(new_fp, prev_fp):
+                            break
+                        prev_fp = new_fp
 
-                    replay_script = monkey_screen_manager.screen_replay_script(focus_screen)
-                    new_actions, skipped = await monkey_screen_manager.upsert_discovered_actions(
-                        db,
-                        session,
-                        screen_node=focus_screen,
-                        candidates=analysis.get("candidates") or [],
-                        screen_width=width,
-                        screen_height=height,
-                        replay_script=replay_script,
-                        actions_by_screen=actions_by_screen,
-                        nodes_by_uuid=nodes_by_uuid,
-                        ancestor_actions=ancestor_actions,
-                    )
                     all_screen_actions = actions_by_screen.get(focus_screen.node_uuid, [])
                     await monkey_screen_manager.finalize_screen_discovery(
                         db, session, focus_screen, all_screen_actions
                     )
-                    skip_msg = f"，排除与父屏重复 {len(skipped)} 个" if skipped else ""
+                    skip_msg = f"，排除重复 {total_skipped} 个" if total_skipped else ""
                     await self._log(
                         db,
                         session,
-                        f"「{focus_screen.title}」识别到 {len(all_screen_actions)} 个元素（新增 {len(new_actions)}{skip_msg}），截图已固化",
+                        f"「{focus_screen.title}」识别到 {len(all_screen_actions)} 个元素（新增 {total_new}{skip_msg}），截图已固化",
                         step_index=step,
                         log_type="screen",
                     )
@@ -218,16 +327,26 @@ class MonkeyExplorer:
                         log_type="action",
                     )
                     yield await self._yield_progress(db, session_uuid, "progress")
+                    before_data_url = data_url
                     try:
+                        extra_steps = monkey_screen_manager.action_extra_scroll_steps(
+                            focus_screen, action
+                        )
+                        if extra_steps:
+                            await monkey_navigation_tools.replay_script(
+                                db,
+                                session,
+                                step_index=step,
+                                script=extra_steps,
+                                nodes_by_uuid=nodes_by_uuid,
+                            )
+                            await asyncio.sleep(0.6)
                         nav_result = await monkey_navigation_tools.execute_screen_action(
                             db,
                             session,
                             step_index=step,
                             action=action,
                             nodes_by_uuid=nodes_by_uuid,
-                        )
-                        await monkey_repository.update_screen_action(
-                            db, action, status="executed", step_index=step
                         )
                         if action.element_node_uuid and action.element_node_uuid in nodes_by_uuid:
                             nodes_by_uuid[action.element_node_uuid].status = "explored"
@@ -254,9 +373,20 @@ class MonkeyExplorer:
                         log_type="action",
                         detail=nav_result,
                     )
+                    if action.center_json:
+                        from app.agent_monkey_service.schemas import Center
+
+                        tap = Center.model_validate_json(action.center_json)
+                        await self._log(
+                            db,
+                            session,
+                            f"真机点击坐标 ({tap.x}, {tap.y})",
+                            step_index=step,
+                            log_type="action",
+                        )
                     yield await self._yield_progress(db, session_uuid, "progress")
 
-                    await self._log(db, session, "截取操作后屏幕，保存子节点", step_index=step, log_type="screen")
+                    await self._log(db, session, "截取操作后屏幕，判断页面归属", step_index=step, log_type="screen")
                     await asyncio.sleep(1.0)
                     after_bytes = await adb_service.capture_screen(serial=session.serial)
                     after_width, after_height = adb_service.get_image_size(after_bytes)
@@ -266,16 +396,158 @@ class MonkeyExplorer:
                     session = await self._reload(db, session_uuid)
                     nodes_by_uuid = {node.node_uuid: node for node in session.nodes}
                     focus_screen = nodes_by_uuid[focus_screen.node_uuid]
+                    action = next(
+                        (a for a in session.screen_actions if a.action_uuid == action.action_uuid),
+                        action,
+                    )
+
+                    # --- 算法初判（感知指纹）+ AI 语义确认，共同决定子节点归属 ---
+                    before_fp = focus_screen.screen_fingerprint
+                    known_state = monkey_screen_manager.find_state_by_fingerprint(
+                        nodes_by_uuid, after_fp, exclude_uuid=focus_screen.node_uuid
+                    )
+                    if monkey_screen_manager.fingerprints_match(after_fp, before_fp):
+                        algo_guess, candidate_title = "same_state", focus_screen.title
+                    elif known_state is not None:
+                        algo_guess, candidate_title = "revisit", known_state.title
+                    else:
+                        algo_guess, candidate_title = "new_state", None
+
+                    relation, ai_title, judged = algo_guess, None, None
+                    try:
+                        judged = await monkey_screen_analyzer.judge_transition(
+                            provider=session.llm_provider,
+                            target_app_name=session.target_app_name,
+                            step_index=step,
+                            action_title=action.element_title,
+                            action_type=action.action_type,
+                            before_data_url=before_data_url,
+                            after_data_url=after_data_url,
+                            algo_guess=algo_guess,
+                            candidate_title=candidate_title,
+                            known_titles=monkey_screen_manager.known_screen_titles(nodes_by_uuid),
+                            on_progress=model_progress,
+                        )
+                        relation = judged.get("relation", algo_guess)
+                        ai_title = judged.get("screen_title")
+                    except Exception as exc:
+                        await self._log(
+                            db,
+                            session,
+                            f"交互归属模型判断失败，回退算法初判（{algo_guess}）：{exc}",
+                            step_index=step,
+                            log_type="model",
+                        )
+
+                    # 指纹已变化或算法初判为新页面时，不信任 same_state/no_effect
+                    if relation in {"same_state", "no_effect"}:
+                        if not monkey_screen_manager.fingerprints_match(after_fp, before_fp):
+                            relation = "new_state"
+                        elif algo_guess == "new_state":
+                            relation = "new_state"
+
+                    # 无新页面：仅记录，不建子节点
+                    if relation in {"same_state", "no_effect"}:
+                        on_home = monkey_screen_manager.is_home_screen(focus_screen)
+                        launcher_miss = on_home and monkey_screen_manager._title_matches_target(
+                            action.element_title, session.target_app_name
+                        )
+                        fail_status = "failed" if launcher_miss else (
+                            "no_effect" if relation == "no_effect" else "executed"
+                        )
+                        await monkey_repository.update_screen_action(
+                            db,
+                            action,
+                            status=fail_status,
+                            step_index=step,
+                        )
+                        if launcher_miss:
+                            monkey_screen_manager.reset_discovery(focus_screen)
+                        await self._log(
+                            db,
+                            session,
+                            (
+                                f"#{action.action_no} {action.element_title}："
+                                + (
+                                    "主屏点击未启动应用，坐标可能不准，将重新定位"
+                                    if launcher_miss
+                                    else (
+                                        "无明显效果"
+                                        if relation == "no_effect"
+                                        else "仍停留在当前页面"
+                                    )
+                                )
+                                + ("，不新建子页面" if not launcher_miss else "")
+                            ),
+                            step_index=step,
+                            log_type="action",
+                        )
+                        await self._refresh_focus_annotation(
+                            db, session, focus_screen, actions_by_screen, action
+                        )
+                        await monkey_repository.update_session(
+                            db, session, step_count=step, current_node_uuid=focus_screen.node_uuid
+                        )
+                        yield await self._yield_progress(db, session_uuid, "step")
+                        continue
+
+                    # 回到已知页面：连一条引用边，不重复探索
+                    if relation == "revisit":
+                        target = known_state
+                        if target is None and judged is not None:
+                            same_title = judged.get("same_as_known_title")
+                            if same_title:
+                                target = next(
+                                    (
+                                        n
+                                        for n in nodes_by_uuid.values()
+                                        if n.node_type == "screen" and n.title == same_title
+                                    ),
+                                    None,
+                                )
+                        await monkey_repository.update_screen_action(
+                            db,
+                            action,
+                            status="executed",
+                            step_index=step,
+                            result_screen_uuid=target.node_uuid if target else None,
+                        )
+                        await self._log(
+                            db,
+                            session,
+                            f"#{action.action_no} {action.element_title}：回到已知页面"
+                            + (f"「{target.title}」" if target else "")
+                            + "，连引用边不重复探索",
+                            step_index=step,
+                            log_type="nav",
+                        )
+                        await self._refresh_focus_annotation(
+                            db, session, focus_screen, actions_by_screen, action
+                        )
+                        await monkey_repository.update_session(
+                            db, session, step_count=step, current_node_uuid=focus_screen.node_uuid
+                        )
+                        yield await self._yield_progress(db, session_uuid, "step")
+                        continue
+
+                    # new_state：新建子页面节点
+                    await monkey_repository.update_screen_action(
+                        db, action, status="executed", step_index=step
+                    )
                     element_parent = (
                         nodes_by_uuid.get(action.element_node_uuid or "")
                         if action.element_node_uuid
                         else None
                     )
                     parent_uuid = element_parent.node_uuid if element_parent else focus_screen.node_uuid
-                    replay_script = monkey_screen_manager.screen_replay_script(focus_screen)
-                    action_replay = replay_script + [
-                        monkey_navigation_tools.action_to_replay_step(action)
-                    ]
+                    action_replay = monkey_screen_manager.build_replay_for_action(
+                        focus_screen, action
+                    ) + [monkey_navigation_tools.action_to_replay_step(action)]
+                    child_title = (
+                        str(ai_title)[:120]
+                        if ai_title
+                        else f"#{action.action_no} {action.element_title}"
+                    )
                     result_screen = await monkey_screen_manager.ensure_screen_node(
                         db,
                         session,
@@ -283,7 +555,7 @@ class MonkeyExplorer:
                         screenshot_data_url=after_data_url,
                         screen_width=after_width,
                         screen_height=after_height,
-                        title=f"#{action.action_no} {action.element_title}",
+                        title=child_title,
                         parent_node_uuid=parent_uuid,
                         depth=(element_parent.depth if element_parent else focus_screen.depth) + 1,
                         replay_script=action_replay,
@@ -295,9 +567,8 @@ class MonkeyExplorer:
                     )
 
                     actions_by_screen = self._group_actions(session)
-                    all_screen_actions = actions_by_screen.get(focus_screen.node_uuid, [])
-                    await monkey_screen_manager.refresh_screen_annotation(
-                        db, session, focus_screen, all_screen_actions
+                    await self._refresh_focus_annotation(
+                        db, session, focus_screen, actions_by_screen, action
                     )
 
                     if monkey_screen_manager.exceeds_max_depth(result_screen, session.max_depth):
@@ -412,11 +683,11 @@ class MonkeyExplorer:
                     log_type="nav",
                 )
                 yield await self._yield_progress(db, session_uuid, "progress")
-                await monkey_screen_manager.ensure_device_at_screen(
+                await monkey_screen_manager.return_to_parent_via_back(
                     db,
                     session,
                     step_index=step,
-                    target_screen=parent_screen,
+                    parent_screen=parent_screen,
                     nodes_by_uuid=nodes_by_uuid,
                 )
                 await monkey_repository.update_session(
@@ -588,10 +859,15 @@ class MonkeyExplorer:
         )
         return {
             "phase": phase,
+            "target_app_name": session.target_app_name,
+            "is_home_screen": monkey_screen_manager.is_home_screen(focus_screen),
             "focus_screen_uuid": focus_screen.node_uuid,
             "focus_screen_title": focus_screen.title,
             "max_depth": session.max_depth,
             "element_children": element_children,
+            "known_elements": [
+                a.element_title for a in actions_by_screen.get(focus_screen.node_uuid, [])
+            ],
             "parent_screen_elements": [
                 {"action_no": a.action_no, "element_title": a.element_title}
                 for a in parent_actions
@@ -614,6 +890,22 @@ class MonkeyExplorer:
             "explored_count": len([a for a in actions if a.status == "executed"]),
             "strategy": "深度优先：执行 #1 并探索完其子树，再执行 #2…；子屏排除与父屏重复元素；截图固化不变",
         }
+
+    async def _refresh_focus_annotation(
+        self,
+        db: AsyncSession,
+        session: MonkeySession,
+        focus_screen: MonkeyNode,
+        actions_by_screen: dict[str, list[MonkeyScreenAction]],
+        updated_action: MonkeyScreenAction | None = None,
+    ) -> None:
+        actions = list(actions_by_screen.get(focus_screen.node_uuid, []))
+        if updated_action:
+            actions = [
+                updated_action if a.action_uuid == updated_action.action_uuid else a
+                for a in actions
+            ]
+        await monkey_screen_manager.refresh_screen_annotation(db, session, focus_screen, actions)
 
     def _sse(self, event: MonkeyStreamEvent) -> str:
         return f"data: {event.model_dump_json()}\n\n"

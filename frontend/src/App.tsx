@@ -7,7 +7,7 @@ import CaseBuilderPage from "./pages/CaseBuilderPage";
 import DataCleaningPage from "./pages/DataCleaningPage";
 import DataFlywheelPage from "./pages/DataFlywheelPage";
 import ResultPage from "./pages/ResultPage";
-import { NAV_ITEMS, type AppPageId } from "./types/navigation";
+import { NAV_ITEMS, type AgentTestBootstrap, type AppPageId } from "./types/navigation";
 import "./App.css";
 
 const PAGE_SUBTITLES: Record<AppPageId, string> = {
@@ -24,6 +24,7 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [activePage, setActivePage] = useState<AppPageId>("case-builder");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [agentTestBootstrap, setAgentTestBootstrap] = useState<AgentTestBootstrap | null>(null);
 
   const activeNavItem = NAV_ITEMS.find((item) => item.id === activePage);
 
@@ -59,9 +60,30 @@ export default function App() {
       </header>
 
       <div className="app-content">
-        {activePage === "case-builder" && <CaseBuilderPage onStatusMessage={setStatusMessage} />}
-        {activePage === "agent-test-position" && <AgentTestPage />}
-        {activePage === "agent-test-code" && <AgentTestCodePage />}
+        {activePage === "case-builder" && (
+          <CaseBuilderPage
+            onStatusMessage={setStatusMessage}
+            onCaseSaved={(bootstrap) => {
+              setAgentTestBootstrap(bootstrap);
+              setActivePage(bootstrap.mode === "code" ? "agent-test-code" : "agent-test-position");
+              setStatusMessage(
+                `已保存 Case #${bootstrap.caseId}，正在加载 ${bootstrap.mode === "code" ? "AgentTest_Code" : "AgentTest_Position"} 执行记录`
+              );
+            }}
+          />
+        )}
+        {activePage === "agent-test-position" && (
+          <AgentTestPage
+            bootstrap={agentTestBootstrap?.mode === "position" ? agentTestBootstrap : null}
+            onBootstrapConsumed={() => setAgentTestBootstrap(null)}
+          />
+        )}
+        {activePage === "agent-test-code" && (
+          <AgentTestCodePage
+            bootstrap={agentTestBootstrap?.mode === "code" ? agentTestBootstrap : null}
+            onBootstrapConsumed={() => setAgentTestBootstrap(null)}
+          />
+        )}
         {activePage === "agent-monkey-test" && <AgentMonkeyTestPage />}
         {activePage === "result" && <ResultPage />}
         {activePage === "data-cleaning" && <DataCleaningPage />}

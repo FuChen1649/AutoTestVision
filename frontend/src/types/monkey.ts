@@ -55,7 +55,7 @@ export interface MonkeyTree {
   nodes: MonkeyNode[];
 }
 
-export type MonkeyActionStatus = "pending" | "executed" | "failed" | "skipped";
+export type MonkeyActionStatus = "pending" | "executed" | "failed" | "skipped" | "no_effect";
 
 export interface MonkeyScreenAction {
   action_uuid: string;

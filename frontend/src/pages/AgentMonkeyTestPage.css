@@ -159,9 +159,52 @@
   border-color: #64748b;
 }
 
+/* 状态配色：左侧色条 + 边框 */
+.monkey-tree-node-card.status-exploring {
+  border-color: rgba(59, 130, 246, 0.7);
+}
+.monkey-tree-node-card.status-explored {
+  border-color: rgba(34, 197, 94, 0.6);
+}
+.monkey-tree-node-card.status-skipped {
+  border-color: rgba(100, 116, 139, 0.6);
+  opacity: 0.78;
+}
+.monkey-tree-node-card.status-failed {
+  border-color: rgba(239, 68, 68, 0.65);
+}
+
+.monkey-tree-node-card.focus {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45), 0 0 16px rgba(59, 130, 246, 0.35);
+}
+
 .monkey-tree-node-card.selected {
   border-color: #3b82f6;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+}
+
+.monkey-tree-status-tag {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-size: 0.6rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+.monkey-tree-status-tag.status-exploring {
+  background: rgba(59, 130, 246, 0.85);
+}
+.monkey-tree-status-tag.status-explored {
+  background: rgba(34, 197, 94, 0.85);
+}
+.monkey-tree-status-tag.status-skipped {
+  background: rgba(100, 116, 139, 0.85);
+}
+.monkey-tree-status-tag.status-failed {
+  background: rgba(239, 68, 68, 0.85);
 }
 
 .monkey-tree-node-card.root {
@@ -218,8 +261,9 @@
 
 .monkey-tree-node-media img {
   width: 100%;
-  height: 200px;
+  height: 156px;
   object-fit: cover;
+  object-position: top center;
   border-radius: 8px;
   background: #0b1220;
   display: block;
@@ -227,7 +271,7 @@
 
 .monkey-tree-node-placeholder {
   width: 100%;
-  height: 200px;
+  height: 156px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -367,28 +411,92 @@
   color: #fde68a;
 }
 
+/* 经典层级连线：父 -> 横向汇流条 -> 各子节点 */
 .monkey-tree-children-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  gap: 12px 16px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #334155;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 0;
+  padding-top: 22px;
   position: relative;
+}
+
+/* 父节点向下引出的竖线 */
+.monkey-tree-children-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 11px;
+  background: #475569;
+  transform: translateX(-50%);
 }
 
 .monkey-tree-child-branch {
   display: flex;
   flex-direction: column;
   align-items: center;
+  position: relative;
+  padding-top: 11px;
 }
 
-.monkey-tree-connector {
+/* 每个子节点向上的竖线 */
+.monkey-tree-child-branch::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
   width: 2px;
-  height: 14px;
+  height: 11px;
   background: #475569;
-  margin-bottom: 4px;
+  transform: translateX(-50%);
+}
+
+/* 横向汇流条 */
+.monkey-tree-child-branch::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -8px;
+  right: -8px;
+  height: 2px;
+  background: #475569;
+}
+.monkey-tree-child-branch:first-child::after {
+  left: 50%;
+}
+.monkey-tree-child-branch:last-child::after {
+  right: 50%;
+}
+.monkey-tree-child-branch:only-child::after {
+  display: none;
+}
+
+.monkey-tree-revisit-badge {
+  font-size: 0.6rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px dashed rgba(148, 163, 184, 0.7);
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.12);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monkey-tree-revisit-badge.inline {
+  border-style: dashed;
+}
+
+.monkey-tree-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+  margin-top: 3px;
 }
 
 .monkey-tree-legend {

@@ -53,7 +53,11 @@ export const agentApi = {
       }),
     }),
 
-  getRun: (runId: string) => request<AgentRunState>(`/runs/${runId}`),
+  getRun: (runId: string, options?: { includeImages?: boolean }) => {
+    const query =
+      options?.includeImages === false ? "?include_images=false" : "";
+    return request<AgentRunState>(`/runs/${runId}${query}`);
+  },
 
   getLogs: (runId: string, agentType?: string) => {
     const query = agentType ? `?agent_type=${encodeURIComponent(agentType)}` : "";

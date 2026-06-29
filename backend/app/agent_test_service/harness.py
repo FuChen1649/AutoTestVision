@@ -11,6 +11,7 @@ from app.agent_test_service.log_stream import set_context as set_log_context
 from app.agent_test_service.schemas import AnalyzeIntentRequest, StepExecutionRecord, VerificationResult
 from app.agent_test_service.state import HarnessAgentState, utc_now
 from app.agent_test_service.step_verifier import step_verifier
+from app.agent_test_service.tap_resolver import refine_tap_intent
 
 logger = get_agent_logger()
 
@@ -156,6 +157,15 @@ async def execute_action_node(state: HarnessAgentState) -> HarnessAgentState:
     if intent is None:
         logger.error("[harness:execute_action] run=%s 缺少意图分析结果", state.get("run_id"))
         raise RuntimeError("缺少意图分析结果")
+
+    step = _current_step(state)
+    intent = await refine_tap_intent(
+        intent,
+        step_description=step.description,
+        serial=state.get("serial"),
+        screen_height=state.get("screen_height", 0),
+        screen_width=state.get("screen_width", 0),
+    )
     logger.info("[harness:execute_action] run=%s action=%s", state.get("run_id"), intent.action)
 
     image_width, image_height = state.get("screen_width", 0), state.get("screen_height", 0)

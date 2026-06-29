@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { caseLiveApi } from "../api/caseLive";
 import { api } from "../api/client";
 import CaseBuilder from "../components/CaseBuilder";
 import DeviceScreen from "../components/DeviceScreen";
@@ -7,10 +8,13 @@ import {
   PERMISSION_PRESET_LABEL,
   PERMISSION_PRESET_STEP_TYPE,
 } from "../constants/case";
+import type { AgentRunState } from "../types/agent";
+import type { AgentTestBootstrap, CaseAgentExecMode } from "../types/navigation";
 import type { CaseData, CaseStep, DeviceInfo, StepScreenBinding } from "../types";
 
 interface CaseBuilderPageProps {
   onStatusMessage: (message: string | null) => void;
+  onCaseSaved?: (bootstrap: AgentTestBootstrap) => void;
 }
 
 function createEmptyStep(order: number): CaseStep {
@@ -40,15 +44,45 @@ function createInitialCaseState() {
     caseId: undefined as number | undefined,
     caseName: "未命名 Case",
     steps: [createEmptyStep(0)] as CaseStep[],
+    liveRunId: undefined as string | undefined,
   };
 }
 
-export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProps) {
+function buildCasePayload(
+  caseName: string,
+  scriptContent: string,
+  steps: CaseStep[]
+): CaseData {
+  return {
+    name: caseName,
+    script_content: scriptContent,
+    steps: steps.map((step, index) => ({
+      step_order: index,
+      step_type: step.step_type ?? "natural",
+      description: step.description,
+      metadata_json: step.metadata_json ?? null,
+      screen_image: step.screen_image ?? null,
+      screen_width: step.screen_width ?? null,
+      screen_height: step.screen_height ?? null,
+      selection_x: step.selection_x ?? null,
+      selection_y: step.selection_y ?? null,
+      selection_width: step.selection_width ?? null,
+      selection_height: step.selection_height ?? null,
+    })),
+  };
+}
+
+export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBuilderPageProps) {
   const [caseId, setCaseId] = useState<number | undefined>();
   const [caseName, setCaseName] = useState("未命名 Case");
   const [scriptContent, setScriptContent] = useState("");
   const [steps, setSteps] = useState<CaseStep[]>([createEmptyStep(0)]);
   const [saving, setSaving] = useState(false);
+  const [stepExecuting, setStepExecuting] = useState(false);
+  const [agentMode, setAgentMode] = useState<CaseAgentExecMode>("position");
+  const [liveRunId, setLiveRunId] = useState<string | undefined>();
+  const [liveRunState, setLiveRunState] = useState<AgentRunState | null>(null);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
 
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
@@ -81,7 +115,7 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
         setSelectedSerial(null);
       }
     } catch {
-      // 静默失败，界面保持「未连接」，由用户点击刷新
+      // 静默失败
     } finally {
       setDeviceLoading(false);
     }
@@ -111,11 +145,75 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
     await api.selectDevice(serial);
   };
 
-  const handleAddStep = () => {
-    setSteps((prev) => [...prev, createEmptyStep(prev.length)]);
+  const handleAddStep = async () => {
+    if (stepExecuting || saving) {
+      return;
+    }
+
+    const lastIndex = steps.length - 1;
+    const lastStep = steps[lastIndex];
+    if (!lastStep || isPermissionPresetStep(lastStep)) {
+      onStatusMessage("请先填写自然语言步骤描述");
+      return;
+    }
+    if (!lastStep.description.trim()) {
+      onStatusMessage("请先填写当前步骤描述，再添加步骤");
+      return;
+    }
+
+    setStepExecuting(true);
+    onStatusMessage(null);
+    setLiveStatus(`正在执行步骤 ${lastIndex + 1}（${agentMode === "position" ? "Position" : "Code"}）…`);
+
+    const payload = buildCasePayload(caseName, scriptContent, steps);
+
+    try {
+      const result = await caseLiveApi.executeStep({
+        case_id: caseId,
+        case_name: payload.name,
+        script_content: payload.script_content,
+        steps: payload.steps,
+        commit_step_index: lastIndex,
+        agent_mode: agentMode,
+        run_id: liveRunId,
+        serial: selectedSerial,
+      });
+
+      if (result.case.id != null) {
+        setCaseId(result.case.id);
+      }
+      setLiveRunId(result.run_id);
+      if (agentMode === "position") {
+        setLiveRunState(result.run as AgentRunState);
+      }
+
+      const stepRecord = result.run.steps?.[lastIndex];
+      const stepOk = stepRecord?.status === "success";
+      const statusText = stepOk
+        ? `步骤 ${lastIndex + 1} 执行成功`
+        : `步骤 ${lastIndex + 1}：${result.message}`;
+
+      setLiveStatus(statusText);
+      onStatusMessage(statusText);
+
+      if (!stepOk && result.run.status === "failed") {
+        return;
+      }
+
+      setSteps((prev) => [...prev, createEmptyStep(prev.length)]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "步骤执行失败";
+      setLiveStatus(message);
+      onStatusMessage(message);
+    } finally {
+      setStepExecuting(false);
+    }
   };
 
   const handleRemoveStep = (index: number) => {
+    if (stepExecuting) {
+      return;
+    }
     setSteps((prev) => {
       const target = prev[index];
       if (!target) {
@@ -137,13 +235,15 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
     });
   };
 
-  const resetCaseWorkspace = (savedCaseId: number) => {
+  const resetCaseWorkspace = () => {
     const initial = createInitialCaseState();
     setCaseId(initial.caseId);
     setCaseName(initial.caseName);
     setSteps(initial.steps);
     setScriptContent("");
-    onStatusMessage(`已保存 Case #${savedCaseId}（含原始脚本），操作区已清空，可开始编写新 Case`);
+    setLiveRunId(initial.liveRunId);
+    setLiveRunState(null);
+    setLiveStatus(null);
   };
 
   const handleStepChange = (index: number, description: string) => {
@@ -178,23 +278,7 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
     setSaving(true);
     onStatusMessage(null);
 
-    const payload: CaseData = {
-      name: caseName,
-      script_content: scriptContent,
-      steps: steps.map((step, index) => ({
-        step_order: index,
-        step_type: step.step_type ?? "natural",
-        description: step.description,
-        metadata_json: step.metadata_json ?? null,
-        screen_image: step.screen_image ?? null,
-        screen_width: step.screen_width ?? null,
-        screen_height: step.screen_height ?? null,
-        selection_x: step.selection_x ?? null,
-        selection_y: step.selection_y ?? null,
-        selection_width: step.selection_width ?? null,
-        selection_height: step.selection_height ?? null,
-      })),
-    };
+    const payload = buildCasePayload(caseName, scriptContent, steps);
 
     try {
       const saved = caseId
@@ -202,7 +286,20 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
         : await api.createCase(payload);
 
       if (saved.id != null) {
-        resetCaseWorkspace(saved.id);
+        const savedCaseId = saved.id;
+        const runId = liveRunId;
+        const runSnapshot = agentMode === "position" ? liveRunState : null;
+        resetCaseWorkspace();
+        onStatusMessage(`已保存 Case #${savedCaseId}，可继续编写新 Case`);
+
+        if (runId && onCaseSaved) {
+          onCaseSaved({
+            caseId: savedCaseId,
+            runId,
+            mode: agentMode,
+            ...(runSnapshot ? { run: runSnapshot } : {}),
+          });
+        }
       }
     } catch (err) {
       onStatusMessage(err instanceof Error ? err.message : "保存失败");
@@ -218,13 +315,23 @@ export default function CaseBuilderPage({ onStatusMessage }: CaseBuilderPageProp
         caseName={caseName}
         steps={steps}
         saving={saving}
+        stepExecuting={stepExecuting}
+        agentMode={agentMode}
+        liveStatus={liveStatus}
         selectedSerial={selectedSerial}
         onCaseNameChange={setCaseName}
+        onAgentModeChange={(mode) => {
+          if (mode !== agentMode) {
+            setLiveRunId(undefined);
+            setLiveStatus(null);
+          }
+          setAgentMode(mode);
+        }}
         onStepChange={handleStepChange}
         onStepScreenBind={handleStepScreenBind}
-        onAddStep={handleAddStep}
+        onAddStep={() => void handleAddStep()}
         onRemoveStep={handleRemoveStep}
-        onSave={handleSave}
+        onSave={() => void handleSave()}
       />
       <DeviceScreen
         devices={devices}

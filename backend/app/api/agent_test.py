@@ -59,8 +59,12 @@ async def start_run(
 
 
 @router.get("/runs/{run_id}", response_model=RunStateResponse)
-async def get_run(run_id: str, db: AsyncSession = Depends(get_db)) -> RunStateResponse:
-    run = await agent_test_service.get_run(run_id, db)
+async def get_run(
+    run_id: str,
+    include_images: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+) -> RunStateResponse:
+    run = await agent_test_service.get_run(run_id, db, include_images=include_images)
     if not run:
         raise HTTPException(status_code=404, detail="运行实例不存在")
     return run

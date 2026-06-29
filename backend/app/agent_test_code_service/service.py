@@ -131,14 +131,41 @@ class AgentTestCodeService:
         run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
         if not run:
             raise RuntimeError("运行实例不存在")
+        if run.status in {"completed", "failed", "cancelled"}:
+            return CodeStepAdvanceResponse(
+                run=agent_code_repository.to_response(run),
+                finished=True,
+                message="运行已结束",
+            )
+
         state = self._to_harness_state(run)
+        start_index = state.get("current_step_index", 0)
         state["status"] = "running"
         await agent_code_repository.update_run_fields(db, run, status="running")
         await agent_code_repository.commit(db)
-        result = await code_harness_graph.ainvoke(state, config=code_harness_run_config(state))
-        await self._sync_state_to_db(db, run_uuid, result)
+
+        config = code_harness_run_config(state)
+        async for event in code_harness_graph.astream(state, stream_mode="updates", config=config):
+            for _node, update in event.items():
+                state = self._merge_state(state, update)
+                await self._sync_state_to_db(db, run_uuid, state)
+            run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
+            if not run:
+                break
+            if run.status in {"failed", "cancelled"}:
+                break
+            if run.current_step_index > start_index:
+                break
+            if run.status == "completed":
+                break
+
         run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
         assert run is not None
+        if run.status == "running" and run.current_step_index >= run.total_steps:
+            await agent_code_repository.update_run_fields(db, run, status="completed")
+            await agent_code_repository.commit(db)
+            run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
+            assert run is not None
         finished = run.status in {"completed", "failed", "cancelled"}
         return CodeStepAdvanceResponse(
             run=agent_code_repository.to_response(run),

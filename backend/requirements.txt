@@ -1,6 +1,7 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
+greenlet>=3.0.0
 asyncpg==0.30.0
 psycopg2-binary==2.9.10
 alembic==1.14.0
@@ -10,6 +11,7 @@ python-dotenv==1.0.1
 websockets==14.1
 Pillow==11.0.0
 langgraph==0.2.60
+langchain==0.3.18
 langchain-core==0.3.28
 langchain-openai==0.2.14
 Jinja2==3.1.4

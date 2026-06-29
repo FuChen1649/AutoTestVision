@@ -2,23 +2,32 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentApi } from "../api/agent";
 import { isApiOfflineError } from "../api/http";
 import AgentExecutionGallery from "../components/AgentExecutionGallery";
-import type {
-  AgentLogItem,
-  AgentRunState,
-  BatchState,
-  CaseListItem,
-  ProviderInfo,
-} from "../types/agent";
+import type { AgentLogItem, AgentRunState, BatchState, CaseListItem, ProviderInfo } from "../types/agent";
+import type { AgentTestBootstrap } from "../types/navigation";
+import { mergeRunLogs } from "../utils/agentRunLogs";
 import "./AgentTestPage.css";
+
+interface AgentTestPageProps {
+  bootstrap?: AgentTestBootstrap | null;
+  onBootstrapConsumed?: () => void;
+}
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
 }
 
-export default function AgentTestPage() {
+export default function AgentTestPage({ bootstrap, onBootstrapConsumed }: AgentTestPageProps) {
   const stopStreamRef = useRef<(() => void) | null>(null);
   const intentScrollRef = useRef<HTMLDivElement | null>(null);
   const verifierScrollRef = useRef<HTMLDivElement | null>(null);
+  const onBootstrapConsumedRef = useRef(onBootstrapConsumed);
+  onBootstrapConsumedRef.current = onBootstrapConsumed;
+
+  const applyPersistedLogs = useCallback((logs: AgentLogItem[], runState: AgentRunState | null) => {
+    const merged = mergeRunLogs(logs, runState ?? undefined);
+    setIntentLogs(merged.intent);
+    setVerifierLogs(merged.verifier);
+  }, []);
 
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
@@ -26,6 +35,7 @@ export default function AgentTestPage() {
   const [intentLogs, setIntentLogs] = useState<AgentLogItem[]>([]);
   const [verifierLogs, setVerifierLogs] = useState<AgentLogItem[]>([]);
   const [loadingCases, setLoadingCases] = useState(false);
+  const [loadingRun, setLoadingRun] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentReady, setAgentReady] = useState(true);
@@ -126,6 +136,85 @@ export default function AgentTestPage() {
     void loadProviders();
     return () => stopStreamRef.current?.();
   }, [loadCases, loadProviders]);
+
+  useEffect(() => {
+    const runId = bootstrap?.runId;
+    const caseId = bootstrap?.caseId;
+    if (!runId || caseId == null) {
+      return;
+    }
+    let active = true;
+    const initialRun = bootstrap?.run ?? null;
+
+    void (async () => {
+      setLoadingRun(true);
+      setError(null);
+      try {
+        setSelectedCaseId(caseId);
+
+        let runState = initialRun;
+        if (!runState) {
+          runState = await agentApi.getRun(runId, { includeImages: false });
+        }
+        if (active) {
+          setRun(runState);
+        }
+
+        const { logs } = await agentApi.getLogs(runId);
+        if (active) {
+          applyPersistedLogs(logs, runState);
+        }
+
+        const list = await agentApi.listCases(10);
+        if (active) {
+          setCases(list);
+        }
+
+        void agentApi
+          .getRun(runId, { includeImages: true })
+          .then((fullRun) => {
+            if (!active) {
+              return;
+            }
+            setRun(fullRun);
+            setIntentLogs((prev) => (prev.length > 0 ? prev : mergeRunLogs([], fullRun).intent));
+            setVerifierLogs((prev) => (prev.length > 0 ? prev : mergeRunLogs([], fullRun).verifier));
+          })
+          .catch((err) => {
+            if (!active || isApiOfflineError(err)) {
+              return;
+            }
+            console.warn("加载截图失败", err);
+          });
+      } catch (err) {
+        if (active && !isApiOfflineError(err)) {
+          setError(err instanceof Error ? err.message : "加载执行记录失败");
+        }
+      } finally {
+        if (active) {
+          setLoadingRun(false);
+          onBootstrapConsumedRef.current?.();
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [bootstrap?.runId, bootstrap?.caseId, bootstrap?.run, applyPersistedLogs]);
+
+  useEffect(() => {
+    if (!run || intentLogs.length > 0) {
+      return;
+    }
+    const derived = mergeRunLogs([], run);
+    if (derived.intent.length) {
+      setIntentLogs(derived.intent);
+    }
+    if (derived.verifier.length) {
+      setVerifierLogs(derived.verifier);
+    }
+  }, [run, intentLogs.length]);
 
   // 终态后清掉所有实时日志（负 ID），只保留持久化结果。
   useEffect(() => {
@@ -464,7 +553,8 @@ export default function AgentTestPage() {
             <span>{running ? "执行中 · 实时跟踪" : "执行结果"}</span>
           </header>
           <div className="agent-panel-body agent-log-body" ref={intentScrollRef}>
-            {intentLogs.length === 0 && (
+            {loadingRun && <div className="agent-panel-empty">加载执行记录…</div>}
+            {!loadingRun && intentLogs.length === 0 && (
               <div className="agent-panel-empty">
                 {running ? "等待意图分析 Agent 开始工作..." : "尚无意图分析记录"}
               </div>
@@ -517,7 +607,8 @@ export default function AgentTestPage() {
             </label>
           </header>
           <div className="agent-panel-body agent-log-body" ref={verifierScrollRef}>
-            {verifierLogs.length === 0 && (
+            {loadingRun && <div className="agent-panel-empty">加载执行记录…</div>}
+            {!loadingRun && verifierLogs.length === 0 && (
               <div className="agent-panel-empty">
                 {!enableVerifier
                   ? "验证已关闭，执行完成后将自动进入下一步"
@@ -554,6 +645,7 @@ export default function AgentTestPage() {
             <span>全程记录 · 点击放大</span>
           </header>
           <div className="agent-panel-body agent-image-body">
+            {loadingRun && !run && <div className="agent-panel-empty">加载执行记录…</div>}
             <AgentExecutionGallery
               attempts={executionAttempts}
               steps={run?.steps ?? []}
