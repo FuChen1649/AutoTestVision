@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { logsApi, type LogEntry } from "../api/platform";
 import { isApiOfflineError } from "../api/http";
 import "./PlatformPages.css";
@@ -45,13 +45,14 @@ export default function LogCenterPage() {
         <div className="platform-toolbar">
           <select className="platform-select" value={source} onChange={(e) => setSource(e.target.value)}>
             <option value="">全部来源</option>
-            <option value="position">Position</option>
-            <option value="code">Code</option>
+            <option value="position">Position 执行</option>
+            <option value="code">Code 执行</option>
+            <option value="script_gen">双脚本生成</option>
             <option value="monkey">Monkey</option>
           </select>
           <input
             className="platform-input"
-            placeholder="run_uuid"
+            placeholder="run_uuid / task_uuid"
             value={runUuid}
             onChange={(e) => setRunUuid(e.target.value)}
           />
@@ -89,6 +90,15 @@ export default function LogCenterPage() {
                       <button className="platform-link-btn" type="button" onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}>
                         详情
                       </button>
+                    )}
+                    {log.run_uuid && log.source !== "script_gen" && (
+                      <Link
+                        className="platform-link-btn"
+                        to={`/reports?runId=${encodeURIComponent(log.run_uuid)}&mode=${log.source === "code" ? "code" : "position"}`}
+                        style={{ marginLeft: 8 }}
+                      >
+                        报告
+                      </Link>
                     )}
                   </td>
                 </tr>

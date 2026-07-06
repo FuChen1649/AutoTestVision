@@ -1,5 +1,5 @@
 import { readApiResponse } from "./http";
-import type { RunPurposeReview, BatchPurposeReview, VerifyStreamEvent } from "../types/resultVerify";
+import type { RunPurposeReview, BatchPurposeReview, VerifyStreamEvent, DualVerifyResult } from "../types/resultVerify";
 
 const API_BASE = "/api/result-verify";
 
@@ -11,9 +11,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return readApiResponse<T>(response);
 }
 
-function buildStreamUrl(path: string, llmProvider?: string | null) {
-  const query = llmProvider ? `?llm_provider=${encodeURIComponent(llmProvider)}` : "";
-  return `${API_BASE}${path}${query}`;
+function buildStreamUrl(path: string, llmProvider?: string | null, execMode?: "position" | "code") {
+  const params = new URLSearchParams();
+  if (llmProvider) params.set("llm_provider", llmProvider);
+  if (execMode) params.set("exec_mode", execMode);
+  const query = params.toString();
+  return `${API_BASE}${path}${query ? `?${query}` : ""}`;
 }
 
 function openVerifyStream(
@@ -74,16 +77,33 @@ export const resultVerifyApi = {
       onEvent: (event: VerifyStreamEvent) => void;
       onError?: (error: Error) => void;
       onDone?: () => void;
-    }
-  ) => openVerifyStream(buildStreamUrl(`/batches/${batchId}/stream`, llmProvider), handlers),
+    },
+    execMode: "position" | "code" = "position"
+  ) => openVerifyStream(buildStreamUrl(`/batches/${batchId}/stream`, llmProvider, execMode), handlers),
 
   getRunReviews: (runId: string) => request<RunPurposeReview>(`/runs/${runId}`),
 
-  verifyBatch: (batchId: string, llmProvider?: string | null) =>
-    request<BatchPurposeReview>(`/batches/${batchId}`, {
+  verifyBatch: (batchId: string, llmProvider?: string | null, execMode: "position" | "code" = "position") => {
+    const params = new URLSearchParams();
+    if (execMode !== "position") params.set("exec_mode", execMode);
+    const query = params.toString();
+    return request<BatchPurposeReview>(`/batches/${batchId}${query ? `?${query}` : ""}`, {
       method: "POST",
       body: JSON.stringify({
         ...(llmProvider ? { llm_provider: llmProvider } : {}),
       }),
-    }),
+    });
+  },
+
+  streamVerifyDual: (
+    taskId: string,
+    llmProvider: string | null | undefined,
+    handlers: {
+      onEvent: (event: VerifyStreamEvent) => void;
+      onError?: (error: Error) => void;
+      onDone?: () => void;
+    }
+  ) => openVerifyStream(buildStreamUrl(`/dual/${taskId}/stream`, llmProvider), handlers),
+
+  getDualReviews: (taskId: string) => request<DualVerifyResult>(`/dual/${taskId}`),
 };

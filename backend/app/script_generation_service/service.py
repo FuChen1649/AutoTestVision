@@ -18,9 +18,14 @@ from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.intent_analyzer import intent_analyzer
 from app.agent_test_service.schemas import ActionIntent, AnalyzeIntentRequest
 from app.agent_test_service.tap_resolver import refine_tap_intent
-from app.agent_test_service.tools import agent_tools, is_tool_step
+from app.agent_test_code_service.repository import agent_code_repository
+from app.agent_test_service.repository import agent_repository
 from app.database import async_session
+from app.models.agent import AgentRun
+from app.models.agent_code import AgentCodeRun
 from app.models.case import Case, CaseStep
+from app.agent_test_service.tools import agent_tools, is_tool_step
+from app.platform_service.task_log import append_platform_task_log
 from app.platform_service.task_service import register_platform_task, sync_task_status
 from app.script_generation_service.registry import script_gen_registry
 from app.services.adb import adb_service
@@ -148,18 +153,182 @@ class ScriptGenerationService:
                 message=str(exc),
             )
 
-    def _emit(self, task_uuid: str, event: str, case_id: int, **kwargs) -> None:
+    async def _emit(self, task_uuid: str, event: str, case_id: int, **kwargs) -> None:
+        message = kwargs.get("message", "")
         payload = ScriptGenStreamEvent(
             event=event,
             task_uuid=task_uuid,
             case_id=case_id,
             step_order=kwargs.get("step_order"),
-            message=kwargs.get("message", ""),
+            message=message,
             detail=kwargs.get("detail"),
         )
         queue = self._streams.get(task_uuid)
         if queue:
             queue.put_nowait(payload)
+
+        try:
+            async with async_session() as db:
+                detail = {"event": event, "case_id": case_id}
+                if kwargs.get("detail"):
+                    detail["payload"] = kwargs["detail"]
+                await append_platform_task_log(
+                    db,
+                    task_uuid,
+                    message or event,
+                    step_order=kwargs.get("step_order"),
+                    agent_type=event,
+                    detail=detail,
+                    commit=True,
+                )
+        except Exception as exc:
+            logger.warning("[script_gen] 写入平台日志失败: %s", exc)
+
+    async def _init_dual_runs(
+        self,
+        db: AsyncSession,
+        case: Case,
+        *,
+        position_serial: str,
+        code_serial: str,
+        llm_provider: str | None,
+    ) -> tuple[AgentRun, AgentCodeRun]:
+        pos_run = await agent_repository.create_run(
+            db,
+            case,
+            position_serial,
+            max_retries=0,
+            llm_provider=llm_provider,
+            auto_commit=False,
+        )
+        code_run = await agent_code_repository.create_run(
+            db,
+            case,
+            code_serial,
+            max_retries=0,
+            llm_provider=llm_provider,
+            auto_commit=False,
+        )
+        pos_run.status = "running"
+        code_run.status = "running"
+        await db.flush()
+        return pos_run, code_run
+
+    async def _persist_position_step(
+        self,
+        db: AsyncSession,
+        pos_run: AgentRun,
+        *,
+        step_order: int,
+        before_image: str,
+        before_annotated: str | None,
+        after_image: str,
+        intent: ActionIntent,
+        exec_error: str | None,
+    ) -> None:
+        status = "failed" if exec_error else "success"
+        await agent_repository.update_step(
+            db,
+            pos_run,
+            step_order,
+            before_image=before_image,
+            before_image_annotated=before_annotated,
+            after_image=after_image,
+            intent=intent,
+            status=status,
+            error=exec_error,
+        )
+        attempt = await agent_repository.create_attempt(
+            db, pos_run, step_order, before_annotated or before_image
+        )
+        await agent_repository.update_latest_attempt(
+            db,
+            pos_run,
+            step_order,
+            before_image_annotated=before_annotated,
+            after_image=after_image,
+            status=status,
+            error=exec_error,
+        )
+        await agent_repository.add_log(
+            db,
+            pos_run,
+            "executor",
+            f"步骤 {step_order + 1} Position 执行{'失败' if exec_error else '完成'}",
+            step_order=step_order,
+            detail={"error": exec_error} if exec_error else None,
+        )
+        _ = attempt
+
+    async def _persist_code_step(
+        self,
+        db: AsyncSession,
+        code_run: AgentCodeRun,
+        *,
+        step_order: int,
+        before_image: str,
+        after_image: str,
+        generated: GeneratedStepCode,
+        exec_error: str | None,
+        ui_xml: str | None = None,
+    ) -> None:
+        from app.agent_test_code_service.code_annotation import annotate_code_before_image
+        from app.agent_test_service.action_executor import action_executor
+
+        status = "failed" if exec_error else "success"
+        code_step = next(item for item in code_run.steps if item.step_order == step_order)
+        code_step.before_image = before_image
+        code_step.after_image = after_image
+        code_step.generated_code_json = generated.model_dump_json()
+        code_step.template_path = generated.template_path
+        code_step.execution_output = generated.execution_output
+        code_step.status = status
+        code_step.error = exec_error
+        if ui_xml:
+            code_step.ui_xml = ui_xml
+        if before_image and generated.code_line:
+            device_w, device_h = await action_executor.get_device_screen_size(code_run.serial)
+            annotated = annotate_code_before_image(
+                before_image,
+                generated.code_line,
+                ui_xml=ui_xml,
+                device_width=device_w,
+                device_height=device_h,
+            )
+            if annotated:
+                code_step.before_image_annotated = annotated
+        await db.flush()
+        await agent_code_repository.add_log(
+            db,
+            code_run,
+            "executor",
+            f"步骤 {step_order + 1} Code 执行{'失败' if exec_error else '完成'}",
+            step_order=step_order,
+            detail={"error": exec_error, "code_line": generated.code_line} if exec_error else {"code_line": generated.code_line},
+        )
+
+    async def _finalize_dual_runs(
+        self,
+        db: AsyncSession,
+        pos_run: AgentRun,
+        code_run: AgentCodeRun,
+        *,
+        completed_steps: int,
+        failed: bool,
+    ) -> None:
+        status = "failed" if failed else "completed"
+        await agent_repository.update_run_fields(
+            db,
+            pos_run,
+            status=status,
+            current_step_index=completed_steps,
+        )
+        await agent_code_repository.update_run_fields(
+            db,
+            code_run,
+            status=status,
+            current_step_index=completed_steps,
+        )
 
     async def get_case_scripts(self, db: AsyncSession, case_id: int) -> CaseScriptsResponse:
         case = await self._load_case(db, case_id)
@@ -239,7 +408,7 @@ class ScriptGenerationService:
                 self._streams.pop(task.task_uuid, None)
 
         runtime.harness_task = asyncio.create_task(runner())
-        self._emit(
+        await self._emit(
             task.task_uuid,
             "started",
             case_id,
@@ -281,14 +450,53 @@ class ScriptGenerationService:
             natural_steps = [s for s in case.steps if not is_tool_step(s.step_type)]
             total = len(natural_steps)
 
+            pos_run, code_run = await self._init_dual_runs(
+                db,
+                case,
+                position_serial=position_serial,
+                code_serial=code_serial,
+                llm_provider=llm_provider,
+            )
+            await agent_repository.add_log(
+                db,
+                pos_run,
+                "system",
+                "双脚本生成 · Position 路径开始",
+                detail={"task_uuid": task_uuid, "serial": position_serial},
+            )
+            await agent_code_repository.add_log(
+                db,
+                code_run,
+                "system",
+                "双脚本生成 · Code 路径开始",
+                detail={"task_uuid": task_uuid, "serial": code_serial},
+            )
+            await sync_task_status(
+                db,
+                task_uuid,
+                progress={
+                    "completed_steps": 0,
+                    "total_steps": total,
+                    "position_run_uuid": pos_run.run_uuid,
+                    "code_run_uuid": code_run.run_uuid,
+                    "message": f"双路径执行记录已创建 Position={position_serial} Code={code_serial}",
+                },
+                commit=True,
+            )
+            await db.commit()
+            pos_run = await agent_repository.get_run_by_uuid(db, pos_run.run_uuid)
+            code_run = await agent_code_repository.get_run_by_uuid(db, code_run.run_uuid)
+            assert pos_run is not None and code_run is not None
+
+            generation_failed = False
             for index, step in enumerate(natural_steps):
                 if runtime and runtime.cancelled:
                     await sync_task_status(db, task_uuid, status="cancelled", commit=True)
-                    self._emit(task_uuid, "cancelled", case_id, message="已取消")
+                    await self._emit(task_uuid, "cancelled", case_id, message="已取消")
                     return
 
                 await self._update_step_status(db, step, "generating")
-                self._emit(
+                await self._emit(
                     task_uuid,
                     "step_start",
                     case_id,
@@ -319,7 +527,7 @@ class ScriptGenerationService:
                     code_image, code_w, code_h = await action_executor.capture_screen(code_serial)
                     ui_xml = await dump_ui_xml_async(code_serial)
 
-                    self._emit(
+                    await self._emit(
                         task_uuid,
                         "capture_before",
                         case_id,
@@ -387,7 +595,7 @@ class ScriptGenerationService:
 
                     pos_before_annotated = annotate_before_image(pos_image, refined_intent)
 
-                    self._emit(
+                    await self._emit(
                         task_uuid,
                         "scripts_ready",
                         case_id,
@@ -478,7 +686,7 @@ class ScriptGenerationService:
                             )
                             return code_image, str(exc)[-400:]
 
-                    self._emit(
+                    await self._emit(
                         task_uuid,
                         "executing",
                         case_id,
@@ -496,6 +704,32 @@ class ScriptGenerationService:
                     )
 
                     step.code_script_json = generated.model_dump_json()
+                    await self._persist_position_step(
+                        db,
+                        pos_run,
+                        step_order=step.step_order,
+                        before_image=pos_image,
+                        before_annotated=pos_before_annotated,
+                        after_image=pos_after,
+                        intent=refined_intent,
+                        exec_error=pos_exec_error,
+                    )
+                    await self._persist_code_step(
+                        db,
+                        code_run,
+                        step_order=step.step_order,
+                        before_image=code_image,
+                        after_image=code_after,
+                        generated=generated,
+                        exec_error=code_exec_error,
+                        ui_xml=ui_xml,
+                    )
+                    await agent_repository.update_run_fields(
+                        db, pos_run, current_step_index=step.step_order + 1
+                    )
+                    await agent_code_repository.update_run_fields(
+                        db, code_run, current_step_index=step.step_order + 1
+                    )
                     await db.commit()
 
                     parts = [f"步骤 {step.step_order + 1} 完成"]
@@ -504,7 +738,7 @@ class ScriptGenerationService:
                     if code_exec_error:
                         parts.append(f"Code({code_serial}) 未通过")
 
-                    self._emit(
+                    await self._emit(
                         task_uuid,
                         "step_executed",
                         case_id,
@@ -525,12 +759,16 @@ class ScriptGenerationService:
                         },
                     )
                 except Exception as exc:
+                    generation_failed = True
                     step.script_status = "failed"
                     await db.commit()
+                    await self._finalize_dual_runs(
+                        db, pos_run, code_run, completed_steps=index, failed=True
+                    )
                     await sync_task_status(
                         db, task_uuid, status="failed", error=str(exc), commit=True
                     )
-                    self._emit(
+                    await self._emit(
                         task_uuid,
                         "error",
                         case_id,
@@ -539,14 +777,23 @@ class ScriptGenerationService:
                     )
                     return
 
+            await self._finalize_dual_runs(
+                db, pos_run, code_run, completed_steps=total, failed=generation_failed
+            )
             await sync_task_status(
                 db,
                 task_uuid,
-                status="completed",
-                progress={"completed_steps": total, "total_steps": total, "message": "生成完成"},
+                status="completed" if not generation_failed else "failed",
+                progress={
+                    "completed_steps": total,
+                    "total_steps": total,
+                    "position_run_uuid": pos_run.run_uuid,
+                    "code_run_uuid": code_run.run_uuid,
+                    "message": "生成完成",
+                },
                 commit=True,
             )
-            self._emit(task_uuid, "completed", case_id, message="双脚本生成完成")
+            await self._emit(task_uuid, "completed", case_id, message="双脚本生成完成")
 
     async def _handle_tool_step(
         self,
@@ -580,7 +827,7 @@ class ScriptGenerationService:
         step.script_status = "ready"
         step.script_generated_at = datetime.now(timezone.utc)
         await db.commit()
-        self._emit(
+        await self._emit(
             task_uuid,
             "step_executed",
             case_id,

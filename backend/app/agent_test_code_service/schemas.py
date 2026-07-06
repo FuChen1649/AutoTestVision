@@ -10,6 +10,7 @@ from app.agent_test_service.schemas import (
     ProviderInfo,
     ProvidersResponse,
     RunStatus,
+    StepPurposeReviewRecord,
     VerificationResult,
 )
 
@@ -41,6 +42,7 @@ class CodeStepExecutionRecord(BaseModel):
     reference_height: int | None = None
     error: str | None = None
     metadata: dict | None = None
+    purpose_review: StepPurposeReviewRecord | None = None
 
 
 class AnalyzeCodeRequest(BaseModel):

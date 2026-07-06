@@ -18,18 +18,6 @@ async def list_reports(
     return await report_service.list_reports(db, exec_mode=exec_mode, limit=limit, offset=offset)
 
 
-@router.get("/{report_id}", response_model=ReportDetailResponse)
-async def get_report(
-    report_id: str,
-    exec_mode: str = Query(default="position"),
-    db: AsyncSession = Depends(get_db),
-) -> ReportDetailResponse:
-    report = await report_service.get_report(db, report_id, exec_mode=exec_mode)
-    if not report:
-        raise HTTPException(status_code=404, detail="报告不存在")
-    return report
-
-
 @router.get("/runs/{run_uuid}")
 async def get_run_report(
     run_uuid: str,
@@ -39,4 +27,16 @@ async def get_run_report(
     report = await report_service.get_run_report(db, run_uuid, exec_mode=exec_mode)
     if not report:
         raise HTTPException(status_code=404, detail="运行报告不存在")
+    return report
+
+
+@router.get("/{report_id}", response_model=ReportDetailResponse)
+async def get_report(
+    report_id: str,
+    exec_mode: str = Query(default="position"),
+    db: AsyncSession = Depends(get_db),
+) -> ReportDetailResponse:
+    report = await report_service.get_report(db, report_id, exec_mode=exec_mode)
+    if not report:
+        raise HTTPException(status_code=404, detail="报告不存在")
     return report

@@ -104,6 +104,44 @@ def model_coords_to_image_pixels(
     return mapped
 
 
+def device_point_to_image_pixels(
+    x: int,
+    y: int,
+    image_width: int,
+    image_height: int,
+    device_width: int,
+    device_height: int,
+) -> tuple[int, int]:
+    """设备触控坐标 → 截图像素坐标（尺寸不一致时缩放）。"""
+    if image_width <= 0 or image_height <= 0 or device_width <= 0 or device_height <= 0:
+        return x, y
+    if image_width == device_width and image_height == device_height:
+        return x, y
+    scale_x = image_width / device_width
+    scale_y = image_height / device_height
+    return round(x * scale_x), round(y * scale_y)
+
+
+def device_rect_to_image_pixels(
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    image_width: int,
+    image_height: int,
+    device_width: int,
+    device_height: int,
+) -> tuple[int, int, int, int]:
+    """设备 bounds → 截图矩形像素坐标。"""
+    left, top = device_point_to_image_pixels(
+        x0, y0, image_width, image_height, device_width, device_height
+    )
+    right, bottom = device_point_to_image_pixels(
+        x1, y1, image_width, image_height, device_width, device_height
+    )
+    return left, top, right, bottom
+
+
 def image_pixels_to_device(
     intent: ActionIntent,
     image_width: int,

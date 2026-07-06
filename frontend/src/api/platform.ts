@@ -153,8 +153,55 @@ export interface ReportSummary {
   failed_cases: number;
   completed_cases: number;
   serial: string | null;
+  case_id?: number | null;
+  case_name?: string | null;
+  run_uuid?: string | null;
+  position_run_uuid?: string | null;
+  code_run_uuid?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ReportCaseResult {
+  case_id: number;
+  case_name: string;
+  status: string;
+  run_uuid: string;
+  total_steps: number;
+  passed_steps: number;
+  error?: string | null;
+  exec_mode?: string;
+  path_label?: string;
+}
+
+export interface ReportDetail {
+  report_id: string;
+  report_type: string;
+  exec_mode: string;
+  status: string;
+  total_cases: number;
+  passed_cases: number;
+  failed_cases: number;
+  completed_cases: number;
+  case_id?: number | null;
+  case_name?: string | null;
+  run_uuid?: string | null;
+  case_results: ReportCaseResult[];
+  dual_reviews?: DualStepVerifyReview[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DualStepVerifyReview {
+  step_order: number;
+  consistent: boolean;
+  before_match: boolean;
+  after_match: boolean;
+  purpose: string;
+  reasoning: string;
+  confidence?: number;
+  model?: string | null;
+  reviewed_at: string;
 }
 
 export const reportsApi = {
@@ -163,7 +210,7 @@ export const reportsApi = {
     return request<{ items: ReportSummary[]; total: number }>(`/reports${qs}`);
   },
   get: (reportId: string, execMode = "position") =>
-    request<Record<string, unknown>>(`/reports/${reportId}?exec_mode=${execMode}`),
+    request<ReportDetail>(`/reports/${reportId}?exec_mode=${execMode}`),
   getRun: (runUuid: string, execMode = "position") =>
     request<Record<string, unknown>>(`/reports/runs/${runUuid}?exec_mode=${execMode}`),
 };

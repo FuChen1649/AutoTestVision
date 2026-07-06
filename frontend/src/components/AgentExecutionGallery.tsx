@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { agentApi } from "../api/agent";
+import { agentCodeApi } from "../api/agentCode";
 import ImageLightbox from "./ImageLightbox";
 import AgentExecutionReplay from "./AgentExecutionReplay";
 import AgentDeviceReplayOverlay from "./AgentDeviceReplayOverlay";
@@ -14,6 +15,9 @@ interface AgentExecutionGalleryProps {
   runStatus?: string;
   agentRunning?: boolean;
   verifyingStepOrder?: number | null;
+  allowDeviceReplay?: boolean;
+  deviceReplayMode?: "position" | "code";
+  logsHref?: string | null;
 }
 
 interface LightboxState {
@@ -48,6 +52,9 @@ function actionHint(attempt: StepAttemptRecord): string | null {
     return null;
   }
   const intent = attempt.intent;
+  if (intent.reasoning?.startsWith("d(")) {
+    return intent.reasoning;
+  }
   if (intent.action === "skip") {
     return attempt.step_type === "permission_preset" ? "权限工具" : "无设备操作";
   }
@@ -114,6 +121,9 @@ export default function AgentExecutionGallery({
   runStatus = "",
   agentRunning = false,
   verifyingStepOrder = null,
+  allowDeviceReplay = true,
+  deviceReplayMode = "position",
+  logsHref = null,
 }: AgentExecutionGalleryProps) {
   const [lightbox, setLightbox] = useState<LightboxState | null>(null);
   const [replayOpen, setReplayOpen] = useState(false);
@@ -156,6 +166,7 @@ export default function AgentExecutionGallery({
   }, [steps]);
 
   const canDeviceReplay =
+    allowDeviceReplay &&
     Boolean(runId) &&
     runStatus !== "running" &&
     !agentRunning &&
@@ -181,7 +192,7 @@ export default function AgentExecutionGallery({
       totalSteps: deviceReplaySteps.length,
     });
 
-    stopDeviceReplayRef.current = agentApi.streamDeviceReplay(
+    stopDeviceReplayRef.current = (deviceReplayMode === "code" ? agentCodeApi : agentApi).streamDeviceReplay(
       runId,
       {
         onEvent: (event) => {
@@ -234,29 +245,36 @@ export default function AgentExecutionGallery({
           >
             虚拟回放
           </button>
-          <button
-            type="button"
-            className="agent-gallery-device-replay-btn"
-            disabled={!canDeviceReplay}
-            title={
-              !runId
-                ? "请先执行一次 Case"
-                : runStatus === "running" || agentRunning
-                  ? "Agent 执行中，请结束后再试"
-                  : deviceReplaySteps.length === 0
-                    ? "暂无成功步骤，无法真机回放"
-                    : `在连接设备上重放 ${deviceReplaySteps.length} 个成功步骤（先场景恢复，步间间隔 3 秒）`
-            }
-            onClick={handleDeviceReplay}
-          >
-            真机回放
-          </button>
+          {allowDeviceReplay && (
+            <button
+              type="button"
+              className="agent-gallery-device-replay-btn"
+              disabled={!canDeviceReplay}
+              title={
+                !runId
+                  ? "请先执行一次 Case"
+                  : runStatus === "running" || agentRunning
+                    ? "Agent 执行中，请结束后再试"
+                    : deviceReplaySteps.length === 0
+                      ? "暂无成功步骤，无法真机回放"
+                      : `在连接设备上重放 ${deviceReplaySteps.length} 个成功步骤（先场景恢复，步间间隔 3 秒）`
+              }
+              onClick={handleDeviceReplay}
+            >
+              真机回放
+            </button>
+          )}
+          {logsHref && (
+            <a className="agent-gallery-replay-btn" href={logsHref} style={{ textDecoration: "none" }}>
+              查看日志
+            </a>
+          )}
         </div>
-        {(replayFrames.length > 0 || deviceReplaySteps.length > 0) && (
+        {(replayFrames.length > 0 || (allowDeviceReplay && deviceReplaySteps.length > 0)) && (
           <span className="agent-gallery-replay-hint">
             {replayFrames.length > 0 && `${replayFrames.length} 步可虚拟回放`}
-            {replayFrames.length > 0 && deviceReplaySteps.length > 0 && " · "}
-            {deviceReplaySteps.length > 0 && `${deviceReplaySteps.length} 步可真机回放`}
+            {replayFrames.length > 0 && allowDeviceReplay && deviceReplaySteps.length > 0 && " · "}
+            {allowDeviceReplay && deviceReplaySteps.length > 0 && `${deviceReplaySteps.length} 步可真机回放`}
           </span>
         )}
       </div>

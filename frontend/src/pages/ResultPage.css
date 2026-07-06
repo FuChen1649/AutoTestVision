@@ -253,3 +253,96 @@
   max-height: 70vh;
   overflow: auto;
 }
+
+.dual-verify-panel {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #111827;
+  padding: 12px;
+}
+
+.dual-verify-panel-header h4 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.dual-verify-panel-header span {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.dual-verify-step-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dual-verify-step {
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 10px;
+  background: #0f172a;
+}
+
+.dual-verify-step.dual-verify-ok {
+  border-color: #166534;
+}
+
+.dual-verify-step.dual-verify-bad {
+  border-color: #991b1b;
+}
+
+.dual-verify-step.dual-verify-running {
+  border-color: #1d4ed8;
+  color: #93c5fd;
+}
+
+.dual-verify-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dual-verify-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.dual-verify-badge.ok {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.dual-verify-badge.bad {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+.dual-verify-purpose {
+  margin: 8px 0 4px;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.dual-verify-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.dual-verify-reasoning {
+  margin: 8px 0 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}

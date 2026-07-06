@@ -70,6 +70,7 @@ class AgentCodeRunStep(Base):
     template_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     execution_output: Mapped[str | None] = mapped_column(Text, nullable=True)
     verification_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    purpose_review_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 

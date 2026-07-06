@@ -92,3 +92,23 @@ async def start_batch(payload: StartCodeBatchRequest, db: AsyncSession = Depends
 @router.get("/batches", response_model=list[CodeBatchListItem])
 async def list_batches(limit: int = Query(default=20, ge=1, le=50), db: AsyncSession = Depends(get_db)):
     return await agent_test_code_service.list_batches(db, limit=limit)
+
+
+@router.get("/runs/{run_id}/device-replay/stream")
+async def stream_device_replay(
+    run_id: str,
+    step_interval_ms: int = Query(default=3000, ge=0, le=30000),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    try:
+        return StreamingResponse(
+            agent_test_code_service.stream_device_replay(run_id, db, step_interval_ms=step_interval_ms),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

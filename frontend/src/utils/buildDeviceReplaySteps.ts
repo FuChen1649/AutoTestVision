@@ -28,6 +28,9 @@ function describeReplayAction(step: AgentStepRecord): string {
   }
 
   const intent = step.intent;
+  if (intent?.reasoning?.startsWith("d(")) {
+    return intent.reasoning;
+  }
   if (!intent) {
     return "未知操作";
   }

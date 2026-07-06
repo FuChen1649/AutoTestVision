@@ -1,15 +1,14 @@
 """LangGraph Harness：截图 + XML → 生成 u2 代码 → pytest 执行 → 验证。"""
 
-import re
 from pathlib import Path
 
 from langgraph.graph import END, StateGraph
 
+from app.agent_test_code_service.code_annotation import annotate_code_before_image
 from app.agent_test_code_service.code_executor import code_executor
 from app.agent_test_code_service.code_generator import code_generator, render_step_test_file
 from app.agent_test_code_service.schemas import AnalyzeCodeRequest, CodeStepExecutionRecord
 from app.agent_test_code_service.state import CodeHarnessState, utc_now
-from app.agent_test_service.image_annotation import annotate_before_image
 from app.agent_test_service.action_executor import action_executor
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.log_stream import set_context as set_log_context
@@ -35,61 +34,6 @@ def _current_step(state: CodeHarnessState) -> CodeStepExecutionRecord:
 
 def _update_step(state: CodeHarnessState, record: CodeStepExecutionRecord) -> list[CodeStepExecutionRecord]:
     return [record]
-
-
-def _parse_action_intent_from_code(
-    code_line: str,
-    fallback_x: int | None = None,
-    fallback_y: int | None = None,
-) -> ActionIntent | None:
-    text = (code_line or "").strip()
-    if not text:
-        return None
-
-    swipe = re.search(
-        r"d\.swipe\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)",
-        text,
-    )
-    if swipe:
-        return ActionIntent(
-            action="swipe",
-            x=int(float(swipe.group(1))),
-            y=int(float(swipe.group(2))),
-            x2=int(float(swipe.group(3))),
-            y2=int(float(swipe.group(4))),
-            confidence=1.0,
-            reasoning=text,
-        )
-
-    long_click = re.search(r"d\.long_click\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", text)
-    if long_click:
-        return ActionIntent(
-            action="long_press",
-            x=int(float(long_click.group(1))),
-            y=int(float(long_click.group(2))),
-            confidence=1.0,
-            reasoning=text,
-        )
-
-    click = re.search(r"d\.click\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", text)
-    if click:
-        return ActionIntent(
-            action="tap",
-            x=int(float(click.group(1))),
-            y=int(float(click.group(2))),
-            confidence=1.0,
-            reasoning=text,
-        )
-
-    if fallback_x is not None and fallback_y is not None:
-        return ActionIntent(
-            action="tap",
-            x=fallback_x,
-            y=fallback_y,
-            confidence=0.6,
-            reasoning=f"fallback from reference: {text}",
-        )
-    return None
 
 
 async def load_step_node(state: CodeHarnessState) -> CodeHarnessState:
@@ -242,7 +186,7 @@ async def execute_code_node(state: CodeHarnessState) -> CodeHarnessState:
     generated.confidence = result.confidence
     generated.reasoning = result.reasoning
     step.generated_code = generated
-    if step.before_image and not step.before_image_annotated:
+    if step.before_image and not step.before_image_annotated and generated.code_line:
         fallback_x = (
             step.reference_x + step.reference_width // 2
             if step.reference_x is not None and step.reference_width is not None
@@ -253,13 +197,18 @@ async def execute_code_node(state: CodeHarnessState) -> CodeHarnessState:
             if step.reference_y is not None and step.reference_height is not None
             else None
         )
-        intent_for_annotation = _parse_action_intent_from_code(
+        device_w, device_h = await action_executor.get_device_screen_size(state.get("serial"))
+        annotated = annotate_code_before_image(
+            step.before_image,
             generated.code_line,
+            ui_xml=state.get("ui_xml"),
+            device_width=device_w,
+            device_height=device_h,
             fallback_x=fallback_x,
             fallback_y=fallback_y,
         )
-        if intent_for_annotation:
-            step.before_image_annotated = annotate_before_image(step.before_image, intent_for_annotation)
+        if annotated:
+            step.before_image_annotated = annotated
     if result.pytest_exit_code != 0:
         step.status = "failed"
         step.error = result.execution_output[-500:] if result.execution_output else "pytest 失败"

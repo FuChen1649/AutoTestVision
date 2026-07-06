@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agent_test_code_service.code_executor import code_executor
 from app.agent_test_code_service.code_generator import code_generator
 from app.agent_test_code_service.harness import code_harness_graph, code_harness_run_config
 from app.agent_test_code_service.repository import agent_code_repository
@@ -27,10 +28,10 @@ from app.agent_test_code_service.state import CodeHarnessState, merge_records, u
 from app.agent_test_service import log_stream
 from app.agent_test_service.agent_logger import get_agent_logger
 from app.agent_test_service.llm_factory import default_provider, probe_providers
-from app.agent_test_service.schemas import CaseListItem, ProviderInfo, ProvidersResponse
-from app.agent_test_service.tools import agent_tools, parse_step_metadata
+from app.agent_test_service.schemas import CaseListItem, DeviceReplayStreamEvent, ProviderInfo, ProvidersResponse
+from app.agent_test_service.tools import agent_tools, is_tool_step, parse_step_metadata
 from app.database import async_session
-from app.models.agent_code import AgentCodeBatchRun, AgentCodeRun
+from app.models.agent_code import AgentCodeBatchResult, AgentCodeBatchRun, AgentCodeRun
 from app.models.case import Case
 from app.services.adb import adb_service
 
@@ -268,9 +269,10 @@ class AgentTestCodeService:
                     break
 
                 event = payload  # type: ignore[assignment]
-                for _node, update in event.items():  # type: ignore[union-attr]
+                for node_name, update in event.items():  # type: ignore[union-attr]
                     merged_state = self._merge_state(merged_state, update)
                     await self._sync_state_to_db(db, run_uuid, merged_state)
+                    await self._persist_node_update(db, run_uuid, node_name, merged_state)
                     run_resp = await self.get_run(run_uuid, db)
                     yield self._sse(CodeStreamEvent(type="progress", run=run_resp))
                     if run_resp and run_resp.status in {"failed", "cancelled"}:
@@ -343,15 +345,31 @@ class AgentTestCodeService:
                 ),
                 db,
             )
+            run = await agent_code_repository.get_run_by_uuid(db, run_resp.run_id)
+            if run:
+                run.batch_id = batch.id
+                await db.flush()
+
             async for _ in self.stream_run(run_resp.run_id, db):
                 pass
             final = await self.get_run(run_resp.run_id, db)
+            status = final.status if final else "failed"
             results.append(
                 {
                     "case_id": case_id,
                     "run_id": run_resp.run_id,
-                    "status": final.status if final else "failed",
+                    "status": status,
                 }
+            )
+            db.add(
+                AgentCodeBatchResult(
+                    batch_id=batch.id,
+                    case_id=case_id,
+                    case_name=final.case_name if final else f"Case #{case_id}",
+                    run_uuid=run_resp.run_id,
+                    status=status,
+                    error=final.error if final else None,
+                )
             )
 
         batch.status = "completed"
@@ -497,8 +515,211 @@ class AgentTestCodeService:
         )
         await agent_code_repository.commit(db)
 
+    async def _persist_node_update(
+        self, db: AsyncSession, run_uuid: str, node_name: str, state: CodeHarnessState
+    ) -> None:
+        run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
+        if not run:
+            return
+        step_index = state.get("current_step_index", 0)
+        if step_index >= len(state.get("steps", [])):
+            return
+        step_record = state["steps"][step_index]
+        if node_name == "skip_verify_step" and step_record.verification:
+            await agent_code_repository.add_log(
+                db,
+                run,
+                "verifier",
+                "验证 Agent 已关闭，跳过本步检查",
+                step_order=step_record.step_order,
+                detail=step_record.verification.model_dump(),
+            )
+        elif node_name == "verify_step" and step_record.verification:
+            verification = step_record.verification
+            await agent_code_repository.add_log(
+                db,
+                run,
+                "verifier",
+                "开始验证步骤执行结果",
+                step_order=step_record.step_order,
+            )
+            await agent_code_repository.add_log(
+                db,
+                run,
+                "verifier",
+                "验证完成：" + ("成功" if verification.success else "失败"),
+                step_order=step_record.step_order,
+                detail=verification.model_dump(),
+            )
+
     def _sse(self, event: CodeStreamEvent) -> str:
         return f"data: {event.model_dump_json()}\n\n"
+
+    def _device_replay_sse(self, event: DeviceReplayStreamEvent) -> str:
+        return f"data: {event.model_dump_json()}\n\n"
+
+    async def stream_device_replay(
+        self,
+        run_uuid: str,
+        db: AsyncSession,
+        step_interval_ms: int = 3000,
+    ) -> AsyncGenerator[str, None]:
+        logger.info(
+            "[code_service:stream_device_replay] run_id=%s interval_ms=%d",
+            run_uuid,
+            step_interval_ms,
+        )
+        run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
+        if not run:
+            raise RuntimeError("运行实例不存在")
+        if run.status == "running":
+            raise RuntimeError("运行尚未结束，请稍后再试真机回放")
+
+        serial = run.serial or adb_service.get_active_serial()
+        if not serial:
+            raise RuntimeError("未连接设备")
+
+        state = self._to_harness_state(run)
+        successful_steps = [
+            step
+            for step in state.get("steps", [])
+            if step.status == "success"
+            and (
+                (step.generated_code and step.generated_code.code_line)
+                or is_tool_step(step.step_type)
+            )
+        ]
+        successful_steps.sort(key=lambda item: item.step_order)
+        if not successful_steps:
+            raise RuntimeError("没有执行成功的步骤，无法进行真机回放")
+
+        interval_sec = max(step_interval_ms, 0) / 1000.0
+        total = len(successful_steps)
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="start",
+                message=f"准备 Code 真机回放，共 {total} 个成功步骤",
+                total_steps=total,
+            )
+        )
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="recover",
+                message="场景恢复：清空后台应用并返回主屏幕…",
+            )
+        )
+        recovery = await agent_tools.recover_scene(serial=serial)
+        if not recovery.get("success"):
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="error",
+                    message=recovery.get("message") or "场景恢复失败",
+                )
+            )
+            return
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="recover",
+                message=recovery.get("message") or "场景恢复完成",
+            )
+        )
+
+        if interval_sec > 0:
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="wait",
+                    message=f"等待 {step_interval_ms / 1000:.1f} 秒…",
+                )
+            )
+            await asyncio.sleep(interval_sec)
+
+        for index, step in enumerate(successful_steps):
+            action_label = self._describe_code_replay_action(step)
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="step",
+                    message=f"执行步骤 {step.step_order + 1}：{step.description}",
+                    step_order=step.step_order,
+                    step_index=index,
+                    total_steps=total,
+                    action=action_label,
+                )
+            )
+
+            try:
+                await self._execute_code_device_replay_step(step, serial=serial)
+            except Exception as exc:
+                logger.exception(
+                    "[code_service:stream_device_replay] 步骤失败 run_id=%s step=%d",
+                    run_uuid,
+                    step.step_order,
+                )
+                yield self._device_replay_sse(
+                    DeviceReplayStreamEvent(
+                        type="error",
+                        message=f"步骤 {step.step_order + 1} 执行失败：{exc}",
+                        step_order=step.step_order,
+                        step_index=index,
+                        total_steps=total,
+                    )
+                )
+                return
+
+            yield self._device_replay_sse(
+                DeviceReplayStreamEvent(
+                    type="step",
+                    message=f"步骤 {step.step_order + 1} 已在设备上执行",
+                    step_order=step.step_order,
+                    step_index=index,
+                    total_steps=total,
+                    action=action_label,
+                )
+            )
+
+            if index < total - 1 and interval_sec > 0:
+                yield self._device_replay_sse(
+                    DeviceReplayStreamEvent(
+                        type="wait",
+                        message=f"等待 {step_interval_ms / 1000:.1f} 秒…",
+                    )
+                )
+                await asyncio.sleep(interval_sec)
+
+        yield self._device_replay_sse(
+            DeviceReplayStreamEvent(
+                type="done",
+                message=f"Code 真机回放完成，共执行 {total} 个步骤",
+                total_steps=total,
+            )
+        )
+
+    async def _execute_code_device_replay_step(
+        self, step: CodeStepExecutionRecord, *, serial: str
+    ) -> None:
+        if is_tool_step(step.step_type):
+            metadata = step.metadata or {}
+            tool_result = await agent_tools.apply_app_permissions(metadata, serial=serial)
+            if not tool_result.success:
+                raise RuntimeError(tool_result.message)
+            return
+
+        generated = step.generated_code
+        if not generated or not generated.code_line:
+            raise RuntimeError("步骤缺少可执行 Code 脚本")
+        result = await code_executor.execute(generated.code_line, serial, test_file=None)
+        if result.pytest_exit_code not in (None, 0):
+            raise RuntimeError((result.execution_output or "Code 执行失败")[-300:])
+
+    def _describe_code_replay_action(self, step: CodeStepExecutionRecord) -> str:
+        if is_tool_step(step.step_type):
+            package = (step.metadata or {}).get("package")
+            return f"tool:{step.step_type}" + (f"({package})" if package else "")
+        if step.generated_code and step.generated_code.code_line:
+            return step.generated_code.code_line
+        return "unknown"
 
 
 agent_test_code_service = AgentTestCodeService()

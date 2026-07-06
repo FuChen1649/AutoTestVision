@@ -12,7 +12,7 @@ from app.agent_test_code_service.schemas import (
     CodeStepExecutionRecord,
     GeneratedStepCode,
 )
-from app.agent_test_service.schemas import VerificationResult
+from app.agent_test_service.schemas import VerificationResult, StepPurposeReviewRecord
 from app.agent_test_service.tools import parse_step_metadata
 from app.models.agent_code import (
     AgentCodeBatchResult,
@@ -87,6 +87,14 @@ class AgentCodeRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_batch_by_uuid(self, db: AsyncSession, batch_uuid: str) -> AgentCodeBatchRun | None:
+        result = await db.execute(
+            select(AgentCodeBatchRun)
+            .options(selectinload(AgentCodeBatchRun.results))
+            .where(AgentCodeBatchRun.batch_uuid == batch_uuid)
+        )
+        return result.scalar_one_or_none()
+
     async def add_log(
         self,
         db: AsyncSession,
@@ -145,6 +153,12 @@ class AgentCodeRepository:
                     generated.execution_output = step.execution_output
             if step.verification_json:
                 verification = VerificationResult.model_validate_json(step.verification_json)
+            purpose_review = None
+            if step.purpose_review_json:
+                try:
+                    purpose_review = StepPurposeReviewRecord.model_validate_json(step.purpose_review_json)
+                except Exception:
+                    purpose_review = None
             xml_preview = (step.ui_xml or "")[:500] if step.ui_xml else None
             steps.append(
                 CodeStepExecutionRecord(
@@ -165,6 +179,7 @@ class AgentCodeRepository:
                     reference_height=step.reference_height,
                     error=step.error,
                     metadata=parse_step_metadata(step.metadata_json),
+                    purpose_review=purpose_review,
                 )
             )
         return CodeRunStateResponse(

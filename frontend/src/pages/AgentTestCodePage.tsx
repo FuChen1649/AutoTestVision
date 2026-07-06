@@ -456,6 +456,7 @@ export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed, init
                 runId={galleryRun.run_id}
                 runStatus={galleryRun.status}
                 agentRunning={running}
+                deviceReplayMode="code"
               />
             )}
           </div>

@@ -11,6 +11,7 @@ from app.models import agent as _agent_models  # noqa: F401
 from app.models import agent_code as _agent_code_models  # noqa: F401
 from app.models import flywheel as _flywheel_models  # noqa: F401
 from app.models import monkey as _monkey_models  # noqa: F401
+from app.models import platform_log as _platform_log_models  # noqa: F401
 from app.models import task as _task_models  # noqa: F401
 from app.agent_test_service.startup_recovery import recover_stale_agent_tasks
 
@@ -37,6 +38,7 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS batch_id INTEGER",
             "ALTER TABLE agent_batch_runs ADD COLUMN IF NOT EXISTS case_ids_json TEXT",
             "ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS purpose_review_json TEXT",
+            "ALTER TABLE agent_code_run_steps ADD COLUMN IF NOT EXISTS purpose_review_json TEXT",
             "ALTER TABLE monkey_screen_actions ADD COLUMN IF NOT EXISTS element_node_uuid TEXT",
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS position_script_json TEXT",
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS code_script_json TEXT",

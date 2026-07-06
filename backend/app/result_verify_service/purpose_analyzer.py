@@ -30,6 +30,8 @@ def _normalize_image(url: str) -> str:
 def _format_action(intent: ActionIntent | None) -> str:
     if intent is None:
         return "无操作信息"
+    if intent.reasoning and intent.reasoning.strip().startswith("d("):
+        return f"u2 代码：{intent.reasoning.strip()}"
     if intent.action == "skip":
         return "跳过（无 UI 操作）"
     if intent.action == "tap":

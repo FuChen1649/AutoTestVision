@@ -22,14 +22,13 @@ def _detail_path(task: PlatformTask) -> str | None:
     if task.task_type == "script_generation" and task.source_case_id:
         return f"/agent/generate/{task.source_case_id}"
     if task.task_type == "run":
-        if task.exec_mode == "code" and task.ref_uuid:
-            return f"/agent/execute/{task.source_case_id}?mode=code&runId={task.ref_uuid}"
         if task.ref_uuid and task.source_case_id:
-            return f"/agent/execute/{task.source_case_id}?mode=position&runId={task.ref_uuid}"
+            mode = task.exec_mode or "position"
+            return f"/reports?runId={task.ref_uuid}&mode={mode}"
     if task.task_type == "batch" and task.ref_uuid:
         return f"/reports?batchId={task.ref_uuid}&mode={task.exec_mode or 'position'}"
-    if task.task_type == "verify" and task.ref_uuid:
-        return f"/reports?runId={task.ref_uuid}"
+    if task.task_type == "script_generation" and task.task_uuid:
+        return f"/reports?taskId={task.task_uuid}&mode=dual"
     return None
 
 

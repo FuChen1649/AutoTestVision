@@ -16,6 +16,14 @@ export interface CodeStepRecord {
   status: string;
   generated_code?: GeneratedStepCode | null;
   verification?: { success: boolean; confidence?: number; reasoning?: string } | null;
+  purpose_review?: {
+    step_order: number;
+    purpose: string;
+    reasoning: string;
+    confidence?: number;
+    model?: string | null;
+    reviewed_at: string;
+  } | null;
   before_image?: string | null;
   before_image_annotated?: string | null;
   after_image?: string | null;
@@ -61,12 +69,11 @@ export function codeRunToGalleryRun(run: CodeRunState): AgentRunState {
     after_image: step.after_image,
     error: step.error,
     metadata: step.metadata,
+    purpose_review: step.purpose_review,
     verification: step.verification,
     intent: step.generated_code
       ? {
           action: "tap",
-          x: 0,
-          y: 0,
           confidence: step.generated_code.confidence,
           reasoning: step.generated_code.code_line,
         }
