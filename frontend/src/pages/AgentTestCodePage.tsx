@@ -11,9 +11,10 @@ import "./AgentTestPage.css";
 interface AgentTestCodePageProps {
   bootstrap?: AgentTestBootstrap | null;
   onBootstrapConsumed?: () => void;
+  initialCaseId?: number | null;
 }
 
-export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed }: AgentTestCodePageProps) {
+export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed, initialCaseId }: AgentTestCodePageProps) {
   const stopStreamRef = useRef<(() => void) | null>(null);
   const [cases, setCases] = useState<CaseListItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
@@ -71,7 +72,7 @@ export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed }: Ag
     try {
       const list = await agentCodeApi.listCases(10);
       setCases(list);
-      setSelectedCaseId((c) => c ?? list[0]?.id ?? null);
+      setSelectedCaseId((c) => initialCaseId ?? c ?? list[0]?.id ?? null);
       setAgentReady(await agentCodeApi.checkReady());
     } catch (err) {
       if (!isApiOfflineError(err)) {
@@ -80,7 +81,7 @@ export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed }: Ag
     } finally {
       setLoadingCases(false);
     }
-  }, []);
+  }, [initialCaseId]);
 
   const loadProviders = useCallback(async () => {
     try {

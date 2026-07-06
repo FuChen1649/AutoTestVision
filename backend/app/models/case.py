@@ -38,5 +38,9 @@ class CaseStep(Base):
     selection_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     selection_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    position_script_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_script_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    script_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    script_status: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     case: Mapped["Case"] = relationship("Case", back_populates="steps")

@@ -168,6 +168,28 @@ async def generate_code_node(state: CodeHarnessState) -> CodeHarnessState:
     step = _current_step(state)
     set_log_context(state.get("run_id"), step.step_order)
     serial = state.get("serial")
+
+    if step.generated_code and step.generated_code.code_line:
+        logger.info(
+            "[code_harness:generate] run=%s step=%d 使用预生成 Code 脚本",
+            state.get("run_id"),
+            step.step_order,
+        )
+        if not step.generated_code.template_path:
+            template_path = render_step_test_file(
+                run_uuid=state.get("run_id", "unknown"),
+                step_order=step.step_order,
+                description=step.description,
+                serial=serial or "",
+                code_line=step.generated_code.code_line,
+            )
+            step.generated_code.template_path = str(template_path)
+        return {
+            "generated_code": step.generated_code,
+            "steps": _update_step(state, step),
+            "updated_at": utc_now(),
+        }
+
     ui_xml = state.get("ui_xml") or ""
     if not ui_xml:
         ui_xml = await dump_ui_xml_async(serial)

@@ -107,6 +107,19 @@ class AgentTestCodeService:
         await agent_code_repository.commit(db)
         run = await agent_code_repository.get_run_by_uuid(db, run.run_uuid)
         assert run is not None
+        from app.platform_service.task_service import register_platform_task
+
+        await register_platform_task(
+            db,
+            task_type="run",
+            exec_mode="code",
+            source_case_id=case.id,
+            case_name=case.name,
+            ref_uuid=run.run_uuid,
+            serial=serial,
+            status="pending",
+            progress={"total_steps": run.total_steps, "completed_steps": 0},
+        )
         return agent_code_repository.to_response(run)
 
     async def get_run(self, run_uuid: str, db: AsyncSession) -> CodeRunStateResponse | None:

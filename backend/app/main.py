@@ -4,13 +4,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import agent_monkey, agent_test, agent_test_code, case_live, cases, device, flywheel, result_verify
+from app.api import agent_monkey, agent_test, agent_test_code, batch, case_live, cases, device, flywheel, logs, reports, result_verify, script_generation, tasks
 from app.config import settings
 from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
 from app.models import agent_code as _agent_code_models  # noqa: F401
 from app.models import flywheel as _flywheel_models  # noqa: F401
 from app.models import monkey as _monkey_models  # noqa: F401
+from app.models import task as _task_models  # noqa: F401
 from app.agent_test_service.startup_recovery import recover_stale_agent_tasks
 
 
@@ -37,6 +38,10 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE agent_batch_runs ADD COLUMN IF NOT EXISTS case_ids_json TEXT",
             "ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS purpose_review_json TEXT",
             "ALTER TABLE monkey_screen_actions ADD COLUMN IF NOT EXISTS element_node_uuid TEXT",
+            "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS position_script_json TEXT",
+            "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS code_script_json TEXT",
+            "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS script_generated_at TIMESTAMPTZ",
+            "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS script_status TEXT",
         ):
             await conn.execute(text(ddl))
     async with async_session() as db:
@@ -64,6 +69,11 @@ app.include_router(agent_test_code.router, prefix="/api")
 app.include_router(agent_monkey.router, prefix="/api")
 app.include_router(result_verify.router, prefix="/api")
 app.include_router(flywheel.router, prefix="/api")
+app.include_router(tasks.router, prefix="/api")
+app.include_router(script_generation.router, prefix="/api")
+app.include_router(reports.router, prefix="/api")
+app.include_router(logs.router, prefix="/api")
+app.include_router(batch.router, prefix="/api")
 
 
 @app.get("/api/health")

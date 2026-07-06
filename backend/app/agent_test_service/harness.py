@@ -122,6 +122,21 @@ async def capture_before_node(state: HarnessAgentState) -> HarnessAgentState:
 async def analyze_intent_node(state: HarnessAgentState) -> HarnessAgentState:
     step = _current_step(state)
     set_log_context(state.get("run_id"), step.step_order)
+
+    if step.intent is not None:
+        logger.info(
+            "[harness:analyze_intent] run=%s step=%d 使用预生成 Position 脚本",
+            state.get("run_id"),
+            step.step_order,
+        )
+        if step.before_image:
+            step.before_image_annotated = annotate_before_image(step.before_image, step.intent)
+        return {
+            "intent": step.intent,
+            "steps": _update_step(state, step),
+            "updated_at": utc_now(),
+        }
+
     logger.info("[harness:analyze_intent] run=%s desc=%s", state.get("run_id"), step.description[:80])
     request = AnalyzeIntentRequest(
         step_description=state.get("current_description", step.description),
@@ -166,6 +181,9 @@ async def execute_action_node(state: HarnessAgentState) -> HarnessAgentState:
         screen_height=state.get("screen_height", 0),
         screen_width=state.get("screen_width", 0),
     )
+    step.intent = intent
+    if step.before_image:
+        step.before_image_annotated = annotate_before_image(step.before_image, intent)
     logger.info("[harness:execute_action] run=%s action=%s", state.get("run_id"), intent.action)
 
     image_width, image_height = state.get("screen_width", 0), state.get("screen_height", 0)

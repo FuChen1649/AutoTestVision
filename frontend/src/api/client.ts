@@ -14,7 +14,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string }>("/health"),
 
-  listCases: () => request<CaseData[]>("/cases"),
+  listCases: () => request<{ items: CaseData[]; total: number; page: number; size: number }>("/cases"),
+
+  listCasesAll: async () => {
+    const page = await request<{ items: CaseData[]; total: number }>("/cases?size=100");
+    return page.items;
+  },
+
+  getCase: (id: number) => request<CaseData>(`/cases/${id}`),
 
   createCase: (payload: CaseData) =>
     request<CaseData>("/cases", {
@@ -63,6 +70,12 @@ export const api = {
     request<{ status: string }>("/device/long-press", {
       method: "POST",
       body: JSON.stringify({ x, y, duration_ms: durationMs, serial }),
+    }),
+
+  pressDeviceKey: (key: "back" | "home" | "recents", serial?: string) =>
+    request<{ status: string }>("/device/key", {
+      method: "POST",
+      body: JSON.stringify({ key, serial }),
     }),
 
   listApps: (serial?: string) => {

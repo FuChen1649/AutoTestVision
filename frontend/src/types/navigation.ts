@@ -1,14 +1,5 @@
 import type { AgentRunState } from "./agent";
 
-export type AppPageId =
-  | "case-builder"
-  | "agent-test-position"
-  | "agent-test-code"
-  | "agent-monkey-test"
-  | "result"
-  | "data-cleaning"
-  | "data-flywheel";
-
 export type CaseAgentExecMode = "position" | "code";
 
 /** 从自然语言 Case 保存后跳转到 AgentTest 页时携带的上下文 */
@@ -16,52 +7,76 @@ export interface AgentTestBootstrap {
   caseId: number;
   runId: string;
   mode: CaseAgentExecMode;
-  /** 从 Case 构建页带过来的运行快照，避免 Position 页首屏拉取超大截图 JSON */
   run?: AgentRunState;
 }
 
 export interface NavItem {
-  id: AppPageId;
+  path: string;
   label: string;
   description: string;
-  dividerBefore?: boolean;
+  /** 用于高亮匹配的前缀 */
+  matchPrefix?: string;
 }
 
-export const NAV_ITEMS: NavItem[] = [
+export interface NavGroup {
+  id: string;
+  title: string;
+  items: NavItem[];
+}
+
+export const NAV_GROUPS: NavGroup[] = [
   {
-    id: "case-builder",
-    label: "自然语言 Case",
-    description: "构建与保存自然语言描述的测试 Case",
+    id: "core",
+    title: "核心测试",
+    items: [
+      { path: "/cases", label: "Case 管理", description: "列表、创建与编辑测试 Case", matchPrefix: "/cases" },
+      { path: "/tasks", label: "任务中心", description: "统一查看与管理执行任务", matchPrefix: "/tasks" },
+      {
+        path: "/agent/generate",
+        label: "双脚本生成",
+        description: "从自然语言同时生成 Position 与 Code 脚本",
+        matchPrefix: "/agent/generate",
+      },
+      {
+        path: "/agent/execute",
+        label: "执行工作台",
+        description: "Position / Code 双路径执行与回放",
+        matchPrefix: "/agent/execute",
+      },
+      { path: "/batch", label: "跑批管理", description: "批量执行 Case 任务", matchPrefix: "/batch" },
+      { path: "/reports", label: "报告中心", description: "批量与单次执行报告", matchPrefix: "/reports" },
+      { path: "/logs", label: "日志中心", description: "集中查询执行日志", matchPrefix: "/logs" },
+    ],
   },
   {
-    id: "agent-test-position",
-    label: "AgentTest_Position",
-    description: "坐标意图分析 + 触控执行",
+    id: "infra",
+    title: "基础设施",
+    items: [
+      { path: "/devices", label: "设备管理", description: "ADB 设备连接与状态", matchPrefix: "/devices" },
+      { path: "/resources", label: "资源依赖", description: "测试资源与依赖（即将上线）", matchPrefix: "/resources" },
+    ],
   },
   {
-    id: "agent-test-code",
-    label: "AgentTest_Code",
-    description: "代码意图分析 + uiautomator2/pytest 执行",
-  },
-  {
-    id: "agent-monkey-test",
-    label: "AgentMonkeyTest",
-    description: "应用探索 · 树形导航与坐标回放",
-  },
-  {
-    id: "result",
-    label: "Result",
-    description: "批量执行结果与回放",
-  },
-  {
-    id: "data-cleaning",
-    label: "数据清洗",
-    description: "样本同步、自动清洗与人工标注",
-    dividerBefore: true,
-  },
-  {
-    id: "data-flywheel",
-    label: "数据飞轮",
-    description: "数据集、RAG、训练与评估",
+    id: "advanced",
+    title: "高级 / 数据",
+    items: [
+      { path: "/monkey", label: "AgentMonkeyTest", description: "应用探索与树形导航", matchPrefix: "/monkey" },
+      { path: "/data/cleaning", label: "数据清洗", description: "样本同步与人工标注", matchPrefix: "/data/cleaning" },
+      { path: "/data/flywheel", label: "数据飞轮", description: "数据集、RAG 与训练", matchPrefix: "/data/flywheel" },
+    ],
   },
 ];
+
+export function isNavActive(pathname: string, item: NavItem): boolean {
+  const prefix = item.matchPrefix ?? item.path;
+  if (prefix === "/cases") {
+    return pathname === "/cases" || pathname.startsWith("/cases/");
+  }
+  if (prefix === "/agent/generate") {
+    return pathname.startsWith("/agent/generate");
+  }
+  if (prefix === "/agent/execute") {
+    return pathname.startsWith("/agent/execute");
+  }
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}

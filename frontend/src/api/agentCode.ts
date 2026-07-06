@@ -21,7 +21,7 @@ export const agentCodeApi = {
   },
 
   listCases: async (limit = 10): Promise<CaseListItem[]> => {
-    const cases = sortCasesByUpdatedAt((await api.listCases()).map(toCaseListItem));
+    const cases = sortCasesByUpdatedAt((await api.listCasesAll()).map(toCaseListItem));
     return limit ? cases.slice(0, limit) : cases;
   },
 

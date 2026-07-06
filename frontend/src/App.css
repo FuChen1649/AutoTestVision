@@ -303,6 +303,55 @@
   border-bottom: 1px solid #1e3a5f;
 }
 
+.case-live-exec-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #374151;
+  background: #111827;
+  color: #6b7280;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.case-live-exec-toggle.off .case-live-exec-icon {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+
+.case-live-exec-toggle.on {
+  color: #fbbf24;
+  border-color: #b45309;
+  background: #422006;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.15);
+}
+
+.case-live-exec-toggle.on .case-live-exec-icon {
+  opacity: 1;
+}
+
+.case-live-exec-toggle:hover:not(:disabled) {
+  border-color: #4b5563;
+}
+
+.case-live-exec-toggle.on:hover:not(:disabled) {
+  border-color: #d97706;
+}
+
+.case-live-exec-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.case-live-exec-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
 .device-header {
   display: flex;
   flex-direction: column;
@@ -896,4 +945,57 @@
   background: rgba(127, 29, 29, 0.9);
   color: #fecaca;
   font-size: 0.85rem;
+}
+
+.device-nav-keys {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.device-nav-keys.overlay {
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.device-nav-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #e5e7eb;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.device-nav-key svg {
+  width: 46%;
+  height: 46%;
+}
+
+.device-nav-key:hover:not(:disabled) {
+  border-color: #60a5fa;
+  background: rgba(30, 58, 138, 0.55);
+  color: #f9fafb;
+}
+
+.device-nav-key:active:not(:disabled),
+.device-nav-key.pressing {
+  transform: scale(0.94);
+  background: rgba(37, 99, 235, 0.65);
+}
+
+.device-nav-key:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

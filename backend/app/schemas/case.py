@@ -34,10 +34,14 @@ class CaseStepResponse(BaseModel):
     selection_width: int | None = None
     selection_height: int | None = None
     metadata_json: dict | None = None
+    position_script_json: dict | None = None
+    code_script_json: dict | None = None
+    script_generated_at: datetime | None = None
+    script_status: str | None = None
 
-    @field_validator("metadata_json", mode="before")
+    @field_validator("metadata_json", "position_script_json", "code_script_json", mode="before")
     @classmethod
-    def parse_metadata(cls, value: object) -> dict | None:
+    def parse_json_fields(cls, value: object) -> dict | None:
         if value is None or value == "":
             return None
         if isinstance(value, dict):
@@ -68,3 +72,21 @@ class CaseResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     steps: list[CaseStepResponse] = Field(default_factory=list)
+
+
+class CaseListItemResponse(BaseModel):
+    id: int
+    name: str
+    script_content: str = ""
+    step_count: int = 0
+    script_status: str | None = None
+    last_run_status: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaseListPageResponse(BaseModel):
+    items: list[CaseListItemResponse]
+    total: int
+    page: int
+    size: int

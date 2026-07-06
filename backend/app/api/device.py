@@ -10,6 +10,7 @@ from app.schemas.device import (
     AppInfo,
     AppPermissionInfo,
     DeviceInfo,
+    DeviceKeyRequest,
     LongPressRequest,
     PermissionApplyRequest,
     PermissionApplyResult,
@@ -119,6 +120,20 @@ async def swipe_device(payload: SwipeRequest) -> dict[str, str]:
             duration_ms=payload.duration_ms,
             serial=payload.serial,
         )
+        return {"status": "ok"}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/key")
+async def press_device_key(payload: DeviceKeyRequest) -> dict[str, str]:
+    try:
+        if payload.key == "back":
+            await asyncio.to_thread(adb_service.press_back_key, payload.serial)
+        elif payload.key == "home":
+            await asyncio.to_thread(adb_service.press_home_key, payload.serial)
+        else:
+            await asyncio.to_thread(adb_service.press_recents_key, payload.serial)
         return {"status": "ok"}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

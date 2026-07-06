@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { agentApi } from "../api/agent";
+import { reportsApi } from "../api/platform";
 import { isApiOfflineError } from "../api/http";
 import { resultVerifyApi } from "../api/resultVerify";
 import AgentExecutionGallery from "../components/AgentExecutionGallery";
 import type { AgentRunState, BatchListItem, BatchState, ProviderInfo } from "../types/agent";
 import type { VerifyStreamEvent } from "../types/resultVerify";
+import "./PlatformPages.css";
 import "./ResultPage.css";
 
 function formatDateTime(value: string) {
@@ -29,8 +32,15 @@ function statusLabel(status: string) {
 }
 
 export default function ResultPage() {
+  const [searchParams] = useSearchParams();
+  const [execMode, setExecMode] = useState<"position" | "code" | "all">(
+    (searchParams.get("mode") as "position" | "code") ?? "all"
+  );
   const stopVerifyStreamRef = useRef<(() => void) | null>(null);
   const [batches, setBatches] = useState<BatchListItem[]>([]);
+  const [reportItems, setReportItems] = useState<
+    { report_id: string; exec_mode: string; status: string; total_cases: number; passed_cases: number; failed_cases: number; created_at: string }[]
+  >([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
@@ -72,8 +82,15 @@ export default function ResultPage() {
     setLoading(true);
     setError(null);
     try {
-      const list = await agentApi.listBatches(50);
-      setBatches(list);
+      if (execMode === "position") {
+        const list = await agentApi.listBatches(50);
+        setBatches(list);
+        setReportItems([]);
+      } else {
+        const resp = await reportsApi.list(execMode === "all" ? undefined : execMode);
+        setReportItems(resp.items);
+        setBatches([]);
+      }
     } catch (err) {
       if (!isApiOfflineError(err)) {
         setError(err instanceof Error ? err.message : "加载批量结果失败");
@@ -81,7 +98,7 @@ export default function ResultPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [execMode]);
 
   useEffect(() => {
     void loadBatches();
@@ -268,13 +285,51 @@ export default function ResultPage() {
         </div>
       </header>
 
+      <div className="platform-tabs" style={{ padding: "0 0 12px" }}>
+        {(["all", "position", "code"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            className={execMode === mode ? "platform-tab active" : "platform-tab"}
+            onClick={() => setExecMode(mode)}
+          >
+            {mode === "all" ? "全部" : mode === "position" ? "Position" : "Code"}
+          </button>
+        ))}
+      </div>
+
       {error && <div className="result-error">{error}</div>}
 
       <div className="result-list">
-        {loading && batches.length === 0 && <div className="result-empty">加载中...</div>}
-        {!loading && batches.length === 0 && <div className="result-empty">暂无批量执行记录</div>}
+        {loading && batches.length === 0 && reportItems.length === 0 && (
+          <div className="result-empty">加载中...</div>
+        )}
+        {!loading && batches.length === 0 && reportItems.length === 0 && (
+          <div className="result-empty">暂无批量执行记录</div>
+        )}
 
-        {batches.map((batch) => {
+        {execMode !== "position" &&
+          reportItems.map((item) => (
+            <article key={`${item.exec_mode}-${item.report_id}`} className="result-batch">
+              <div className="result-batch-header-row">
+                <div className="result-batch-header">
+                  <div className="result-batch-summary">
+                    <strong>
+                      [{item.exec_mode}] 批次 {item.report_id.slice(0, 8)}
+                    </strong>
+                    <span>
+                      {formatDateTime(item.created_at)} · {item.total_cases} Case · 通过 {item.passed_cases} / 失败{" "}
+                      {item.failed_cases}
+                    </span>
+                  </div>
+                  <span className={`result-status ${statusClass(item.status)}`}>{statusLabel(item.status)}</span>
+                </div>
+              </div>
+            </article>
+          ))}
+
+        {execMode !== "code" &&
+          batches.map((batch) => {
           const expanded = expandedBatchId === batch.batch_id;
           const detail = batchDetails[batch.batch_id];
           const batchVerifying = verifyingBatchId === batch.batch_id;

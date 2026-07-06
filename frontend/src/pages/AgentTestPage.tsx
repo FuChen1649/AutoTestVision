@@ -10,13 +10,14 @@ import "./AgentTestPage.css";
 interface AgentTestPageProps {
   bootstrap?: AgentTestBootstrap | null;
   onBootstrapConsumed?: () => void;
+  initialCaseId?: number | null;
 }
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString();
 }
 
-export default function AgentTestPage({ bootstrap, onBootstrapConsumed }: AgentTestPageProps) {
+export default function AgentTestPage({ bootstrap, onBootstrapConsumed, initialCaseId }: AgentTestPageProps) {
   const stopStreamRef = useRef<(() => void) | null>(null);
   const intentScrollRef = useRef<HTMLDivElement | null>(null);
   const verifierScrollRef = useRef<HTMLDivElement | null>(null);
@@ -68,7 +69,7 @@ export default function AgentTestPage({ bootstrap, onBootstrapConsumed }: AgentT
     try {
       const list = await agentApi.listCases(10);
       setCases(list);
-      setSelectedCaseId((current) => current ?? list[0]?.id ?? null);
+      setSelectedCaseId((current) => initialCaseId ?? current ?? list[0]?.id ?? null);
 
       const ready = await agentApi.checkReady();
       setAgentReady(ready);
@@ -79,7 +80,7 @@ export default function AgentTestPage({ bootstrap, onBootstrapConsumed }: AgentT
     } finally {
       setLoadingCases(false);
     }
-  }, []);
+  }, [initialCaseId]);
 
   const handleDeleteCase = async (caseItem: CaseListItem) => {
     if (running || batchRunning) {

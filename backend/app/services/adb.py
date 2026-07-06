@@ -233,6 +233,23 @@ class AdbService:
         logger.info("[adb] 已发送 HOME 键 serial=%s times=%d", target, sent)
         return sent
 
+    def press_recents_key(
+        self, serial: str | None = None, *, times: int = 1, interval_sec: float = 0.35
+    ) -> int:
+        """发送 Android 最近任务键（KEYCODE_APP_SWITCH=187），打开后台应用切换。"""
+        if times < 1:
+            return 0
+        target = self._resolve_serial(serial)
+        sent = 0
+        for index in range(times):
+            result = self._run("shell", "input", "keyevent", "187", serial=target, timeout=5)
+            if result.returncode == 0:
+                sent += 1
+            if index < times - 1:
+                time.sleep(interval_sec)
+        logger.info("[adb] 已发送 RECENTS 键 serial=%s times=%d", target, sent)
+        return sent
+
     def go_home(self, serial: str | None = None) -> None:
         """通过 Launcher Intent 返回手机主屏幕。"""
         target = self._resolve_serial(serial)

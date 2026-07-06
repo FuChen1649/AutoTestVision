@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -57,3 +59,8 @@ class PermissionApplyResult(BaseModel):
     revoked: list[str] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+
+
+class DeviceKeyRequest(BaseModel):
+    key: Literal["back", "home", "recents"]
+    serial: str | None = None

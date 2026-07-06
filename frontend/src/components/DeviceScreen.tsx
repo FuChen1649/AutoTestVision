@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, createScreenStream } from "../api/client";
 import AppPermissionControls from "./AppPermissionControls";
+import DeviceNavKeys from "./DeviceNavKeys";
 import type { DeviceInfo, ScreenFrame } from "../types";
 
 interface DeviceScreenProps {
@@ -11,6 +12,7 @@ interface DeviceScreenProps {
   onSelectDevice: (serial: string) => void;
   onPermissionPresetAdded: (payload: { package: string; permissions: string[] }) => void;
   readOnly?: boolean;
+  showNavKeys?: boolean;
   highlightCenter?: { x: number; y: number } | null;
   highlightBBox?: { x: number; y: number; w: number; h: number } | null;
 }
@@ -47,6 +49,7 @@ export default function DeviceScreen({
   onSelectDevice,
   onPermissionPresetAdded,
   readOnly = false,
+  showNavKeys = false,
   highlightCenter = null,
   highlightBBox = null,
 }: DeviceScreenProps) {
@@ -70,6 +73,12 @@ export default function DeviceScreen({
   const [error, setError] = useState<string | null>(null);
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize>({ width: 0, height: 0 });
+  const [screenLayout, setScreenLayout] = useState<DisplayRect>({
+    offsetX: 0,
+    offsetY: 0,
+    width: 0,
+    height: 0,
+  });
 
   useEffect(() => {
     selectedSerialRef.current = selectedSerial;
@@ -130,7 +139,21 @@ export default function DeviceScreen({
     ctx.drawImage(image, offsetX, offsetY, displayWidth, displayHeight);
 
     deviceSizeRef.current = { width: frame.width, height: frame.height };
-    displayRectRef.current = { offsetX, offsetY, width: displayWidth, height: displayHeight };
+    const nextLayout = {
+      offsetX,
+      offsetY,
+      width: displayWidth,
+      height: displayHeight,
+    };
+    displayRectRef.current = nextLayout;
+    setScreenLayout((prev) =>
+      prev.offsetX === nextLayout.offsetX &&
+      prev.offsetY === nextLayout.offsetY &&
+      prev.width === nextLayout.width &&
+      prev.height === nextLayout.height
+        ? prev
+        : nextLayout
+    );
 
     const scaleX = displayWidth / frame.width;
     const scaleY = displayHeight / frame.height;
@@ -263,6 +286,7 @@ export default function DeviceScreen({
       latestFrameRef.current = null;
       frameImageRef.current = null;
       frameImageSrcRef.current = null;
+      setScreenLayout({ offsetX: 0, offsetY: 0, width: 0, height: 0 });
       paintCanvas();
       return;
     }
@@ -513,6 +537,15 @@ export default function DeviceScreen({
               <p>{deviceLoading ? "正在连接..." : "未连接"}</p>
               <p>请连接设备后点击「刷新」</p>
             </div>
+          )}
+          {showNavKeys && !readOnly && (
+            <DeviceNavKeys
+              serial={selectedSerial}
+              viewportWidth={viewportSize.width}
+              layout={screenLayout}
+              disabled={!connected}
+              onError={(message) => setError(message || null)}
+            />
           )}
         </div>
       </div>

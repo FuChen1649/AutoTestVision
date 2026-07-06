@@ -70,6 +70,7 @@ class AgentRepository:
                     reference_width=step.selection_width,
                     reference_height=step.selection_height,
                     metadata_json=step.metadata_json,
+                    intent_json=step.position_script_json,
                 )
             )
         db.add(run)

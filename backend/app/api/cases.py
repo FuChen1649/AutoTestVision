@@ -1,13 +1,20 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.case import Case, CaseStep
-from app.schemas.case import CaseCreate, CaseResponse, CaseUpdate
+from app.platform_service.repository import case_query_repository
+from app.schemas.case import (
+    CaseCreate,
+    CaseListItemResponse,
+    CaseListPageResponse,
+    CaseResponse,
+    CaseUpdate,
+)
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -31,10 +38,31 @@ def _build_step(step, index: int) -> CaseStep:
     )
 
 
-@router.get("", response_model=list[CaseResponse])
-async def list_cases(db: AsyncSession = Depends(get_db)) -> list[Case]:
-    result = await db.execute(select(Case).options(selectinload(Case.steps)).order_by(Case.updated_at.desc()))
-    return list(result.scalars().all())
+@router.get("", response_model=CaseListPageResponse)
+async def list_cases(
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> CaseListPageResponse:
+    cases, total = await case_query_repository.list_cases_paginated(db, q=q, page=page, size=size)
+    items: list[CaseListItemResponse] = []
+    for case in cases:
+        last_run_status = await case_query_repository.last_run_status(db, case.id)
+        script_status = case_query_repository.aggregate_script_status(case)
+        items.append(
+            CaseListItemResponse(
+                id=case.id,
+                name=case.name,
+                script_content=case.script_content,
+                step_count=len(case.steps),
+                script_status=script_status,
+                last_run_status=last_run_status,
+                created_at=case.created_at,
+                updated_at=case.updated_at,
+            )
+        )
+    return CaseListPageResponse(items=items, total=total, page=page, size=size)
 
 
 @router.post("", response_model=CaseResponse, status_code=201)

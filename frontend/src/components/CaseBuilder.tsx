@@ -14,10 +14,12 @@ interface CaseBuilderProps {
   saving: boolean;
   stepExecuting: boolean;
   agentMode: CaseAgentExecMode;
+  liveExecEnabled: boolean;
   liveStatus: string | null;
   selectedSerial: string | null;
   onCaseNameChange: (name: string) => void;
   onAgentModeChange: (mode: CaseAgentExecMode) => void;
+  onLiveExecToggle: (enabled: boolean) => void;
   onStepChange: (index: number, description: string) => void;
   onStepScreenBind: (index: number, binding: StepScreenBinding) => void;
   onAddStep: () => void;
@@ -31,10 +33,12 @@ export default function CaseBuilder({
   saving,
   stepExecuting,
   agentMode,
+  liveExecEnabled,
   liveStatus,
   selectedSerial,
   onCaseNameChange,
   onAgentModeChange,
+  onLiveExecToggle,
   onStepChange,
   onStepScreenBind,
   onAddStep,
@@ -51,14 +55,35 @@ export default function CaseBuilder({
           <span className="panel-hint">单步描述：action + position + color? + text/shape/icon</span>
         </div>
         <div className="case-header-actions">
+          <button
+            type="button"
+            className={`case-live-exec-toggle ${liveExecEnabled ? "on" : "off"}`}
+            disabled={stepExecuting || saving}
+            title={
+              liveExecEnabled
+                ? "实时执行已开启：添加步骤时调模型并在设备上执行"
+                : "实时执行已关闭：仅编写步骤，不调用模型执行"
+            }
+            aria-label={liveExecEnabled ? "关闭实时执行" : "开启实时执行"}
+            aria-pressed={liveExecEnabled}
+            onClick={() => onLiveExecToggle(!liveExecEnabled)}
+          >
+            <span className="case-live-exec-icon" aria-hidden>
+              ⚡
+            </span>
+          </button>
           <label className="exec-mode-label">
             <span className="exec-mode-label-text">执行</span>
             <select
               className="exec-mode-select"
               value={agentMode}
-              disabled={stepExecuting || saving}
+              disabled={stepExecuting || saving || !liveExecEnabled}
               onChange={(event) => onAgentModeChange(event.target.value as CaseAgentExecMode)}
-              title="添加步骤时同步执行 AgentTest"
+              title={
+                liveExecEnabled
+                  ? "添加步骤时同步执行 Agent"
+                  : "开启实时执行后生效"
+              }
             >
               <option value="position">Position</option>
               <option value="code">Code</option>
@@ -70,7 +95,7 @@ export default function CaseBuilder({
         </div>
       </header>
 
-      {liveStatus && <div className="case-live-status">{liveStatus}</div>}
+      {liveExecEnabled && liveStatus && <div className="case-live-status">{liveStatus}</div>}
 
       <div className="panel-body case-body">
         <label className="field-label">
@@ -144,7 +169,7 @@ export default function CaseBuilder({
 
         <button className="add-step-btn" onClick={onAddStep} type="button" disabled={stepExecuting || saving}>
           <span className="add-icon">+</span>
-          {stepExecuting ? "执行中…" : "添加步骤"}
+          {stepExecuting ? "执行中…" : liveExecEnabled ? "添加并执行" : "添加步骤"}
         </button>
       </div>
 

@@ -64,6 +64,7 @@ class AgentCodeRepository:
                     reference_width=step.selection_width,
                     reference_height=step.selection_height,
                     metadata_json=step.metadata_json,
+                    generated_code_json=step.code_script_json,
                 )
             )
         db.add(run)

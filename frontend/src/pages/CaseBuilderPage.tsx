@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { caseLiveApi } from "../api/caseLive";
 import { api } from "../api/client";
 import CaseBuilder from "../components/CaseBuilder";
@@ -9,12 +10,12 @@ import {
   PERMISSION_PRESET_STEP_TYPE,
 } from "../constants/case";
 import type { AgentRunState } from "../types/agent";
-import type { AgentTestBootstrap, CaseAgentExecMode } from "../types/navigation";
+import type { CaseAgentExecMode } from "../types/navigation";
 import type { CaseData, CaseStep, DeviceInfo, StepScreenBinding } from "../types";
 
 interface CaseBuilderPageProps {
-  onStatusMessage: (message: string | null) => void;
-  onCaseSaved?: (bootstrap: AgentTestBootstrap) => void;
+  onStatusMessage?: (message: string | null) => void;
+  onCaseSaved?: (payload: { caseId: number; runId: string; mode: CaseAgentExecMode; run?: AgentRunState }) => void;
 }
 
 function createEmptyStep(order: number): CaseStep {
@@ -72,14 +73,32 @@ function buildCasePayload(
   };
 }
 
+const LIVE_EXEC_STORAGE_KEY = "case-builder-live-exec";
+
+function readLiveExecPreference(): boolean {
+  try {
+    return localStorage.getItem(LIVE_EXEC_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBuilderPageProps) {
-  const [caseId, setCaseId] = useState<number | undefined>();
+  const navigate = useNavigate();
+  const { caseId: caseIdParam } = useParams();
+  const editCaseId = caseIdParam ? Number(caseIdParam) : undefined;
+
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const notify = onStatusMessage ?? setStatusMessage;
+
+  const [caseId, setCaseId] = useState<number | undefined>(editCaseId);
   const [caseName, setCaseName] = useState("未命名 Case");
   const [scriptContent, setScriptContent] = useState("");
   const [steps, setSteps] = useState<CaseStep[]>([createEmptyStep(0)]);
   const [saving, setSaving] = useState(false);
   const [stepExecuting, setStepExecuting] = useState(false);
   const [agentMode, setAgentMode] = useState<CaseAgentExecMode>("position");
+  const [liveExecEnabled, setLiveExecEnabled] = useState(readLiveExecPreference);
   const [liveRunId, setLiveRunId] = useState<string | undefined>();
   const [liveRunState, setLiveRunState] = useState<AgentRunState | null>(null);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
@@ -92,6 +111,37 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
   useEffect(() => {
     selectedSerialRef.current = selectedSerial;
   }, [selectedSerial]);
+
+  useEffect(() => {
+    if (!editCaseId) return;
+    void (async () => {
+      try {
+        const data = await api.getCase(editCaseId);
+        setCaseId(data.id);
+        setCaseName(data.name);
+        setScriptContent(data.script_content ?? "");
+        setSteps(
+          data.steps.length > 0
+            ? data.steps.map((s) => ({
+                step_order: s.step_order,
+                step_type: s.step_type,
+                description: s.description,
+                metadata_json: s.metadata_json ?? undefined,
+                screen_image: s.screen_image ?? undefined,
+                screen_width: s.screen_width ?? undefined,
+                screen_height: s.screen_height ?? undefined,
+                selection_x: s.selection_x ?? undefined,
+                selection_y: s.selection_y ?? undefined,
+                selection_width: s.selection_width ?? undefined,
+                selection_height: s.selection_height ?? undefined,
+              }))
+            : [createEmptyStep(0)]
+        );
+      } catch (err) {
+        notify(err instanceof Error ? err.message : "加载 Case 失败");
+      }
+    })();
+  }, [editCaseId, notify]);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -153,16 +203,27 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
     const lastIndex = steps.length - 1;
     const lastStep = steps[lastIndex];
     if (!lastStep || isPermissionPresetStep(lastStep)) {
-      onStatusMessage("请先填写自然语言步骤描述");
+      notify("请先填写自然语言步骤描述");
       return;
     }
     if (!lastStep.description.trim()) {
-      onStatusMessage("请先填写当前步骤描述，再添加步骤");
+      notify("请先填写当前步骤描述，再添加步骤");
+      return;
+    }
+
+    if (!liveExecEnabled) {
+      setSteps((prev) => [...prev, createEmptyStep(prev.length)]);
+      notify(`已添加步骤 ${lastIndex + 1}，继续编写下一步`);
+      return;
+    }
+
+    if (!selectedSerial) {
+      notify("请先连接设备后再开启实时执行");
       return;
     }
 
     setStepExecuting(true);
-    onStatusMessage(null);
+    notify(null);
     setLiveStatus(`正在执行步骤 ${lastIndex + 1}（${agentMode === "position" ? "Position" : "Code"}）…`);
 
     const payload = buildCasePayload(caseName, scriptContent, steps);
@@ -194,7 +255,7 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
         : `步骤 ${lastIndex + 1}：${result.message}`;
 
       setLiveStatus(statusText);
-      onStatusMessage(statusText);
+      notify(statusText);
 
       if (!stepOk && result.run.status === "failed") {
         return;
@@ -204,7 +265,7 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
     } catch (err) {
       const message = err instanceof Error ? err.message : "步骤执行失败";
       setLiveStatus(message);
-      onStatusMessage(message);
+      notify(message);
     } finally {
       setStepExecuting(false);
     }
@@ -261,7 +322,7 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
     setSteps((prev) =>
       prev.map((step, stepIndex) => (stepIndex === index ? { ...step, ...binding } : step))
     );
-    onStatusMessage(`步骤 ${index + 1} 已绑定屏幕截图`);
+    notify(`步骤 ${index + 1} 已绑定屏幕截图`);
   };
 
   const handleAddPermissionPresetStep = (payload: { package: string; permissions: string[] }) => {
@@ -271,12 +332,26 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
         step_order: index,
       }))
     );
-    onStatusMessage("已记录应用权限修改前置步骤（含包名与权限配置）");
+    notify("已记录应用权限修改前置步骤（含包名与权限配置）");
+  };
+
+  const handleLiveExecToggle = (enabled: boolean) => {
+    setLiveExecEnabled(enabled);
+    try {
+      localStorage.setItem(LIVE_EXEC_STORAGE_KEY, enabled ? "1" : "0");
+    } catch {
+      // ignore
+    }
+    if (!enabled) {
+      setLiveRunId(undefined);
+      setLiveRunState(null);
+      setLiveStatus(null);
+    }
   };
 
   const handleSave = async () => {
     setSaving(true);
-    onStatusMessage(null);
+    notify(null);
 
     const payload = buildCasePayload(caseName, scriptContent, steps);
 
@@ -290,8 +365,7 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
         const runId = liveRunId;
         const runSnapshot = agentMode === "position" ? liveRunState : null;
         resetCaseWorkspace();
-        onStatusMessage(`已保存 Case #${savedCaseId}，可继续编写新 Case`);
-
+        notify(`已保存 Case #${savedCaseId}`);
         if (runId && onCaseSaved) {
           onCaseSaved({
             caseId: savedCaseId,
@@ -299,17 +373,21 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
             mode: agentMode,
             ...(runSnapshot ? { run: runSnapshot } : {}),
           });
+        } else {
+          navigate(`/cases/${savedCaseId}/edit`);
         }
       }
     } catch (err) {
-      onStatusMessage(err instanceof Error ? err.message : "保存失败");
+      notify(err instanceof Error ? err.message : "保存失败");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <main className="workspace">
+    <>
+      {statusMessage && <div className="status-banner">{statusMessage}</div>}
+      <main className="workspace">
       <ScriptEditor value={scriptContent} onChange={setScriptContent} />
       <CaseBuilder
         caseName={caseName}
@@ -317,6 +395,7 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
         saving={saving}
         stepExecuting={stepExecuting}
         agentMode={agentMode}
+        liveExecEnabled={liveExecEnabled}
         liveStatus={liveStatus}
         selectedSerial={selectedSerial}
         onCaseNameChange={setCaseName}
@@ -327,6 +406,7 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
           }
           setAgentMode(mode);
         }}
+        onLiveExecToggle={handleLiveExecToggle}
         onStepChange={handleStepChange}
         onStepScreenBind={handleStepScreenBind}
         onAddStep={() => void handleAddStep()}
@@ -340,7 +420,9 @@ export default function CaseBuilderPage({ onStatusMessage, onCaseSaved }: CaseBu
         onRefreshDevices={refreshDevices}
         onSelectDevice={handleSelectDevice}
         onPermissionPresetAdded={handleAddPermissionPresetStep}
+        showNavKeys
       />
     </main>
+    </>
   );
 }

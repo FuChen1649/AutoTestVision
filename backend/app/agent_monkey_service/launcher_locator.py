@@ -130,6 +130,11 @@ def find_launcher_icon_in_xml(xml: str, target_app_name: str) -> tuple[BBox, Cen
 async def find_clickable_by_text(
     serial: str | None,
     label: str,
+    *,
+    hint_x: int | None = None,
+    hint_y: int | None = None,
+    screen_width: int = 0,
+    screen_height: int = 0,
 ) -> tuple[BBox, Center, str] | None:
     """按 text/content-desc 在 UI 层级中定位可点击控件（应用内 Tab、按钮等）。"""
     target = (label or "").strip()
@@ -137,7 +142,14 @@ async def find_clickable_by_text(
         return None
     try:
         xml = await adb_service.dump_ui_hierarchy_async(serial)
-        found = _find_clickable_in_xml(xml, target)
+        found = _find_clickable_in_xml(
+            xml,
+            target,
+            hint_x=hint_x,
+            hint_y=hint_y,
+            screen_width=screen_width,
+            screen_height=screen_height,
+        )
         if found:
             bbox, center, matched = found
             logger.info(
@@ -153,7 +165,15 @@ async def find_clickable_by_text(
         return None
 
 
-def _find_clickable_in_xml(xml: str, target: str) -> tuple[BBox, Center, str] | None:
+def _find_clickable_in_xml(
+    xml: str,
+    target: str,
+    *,
+    hint_x: int | None = None,
+    hint_y: int | None = None,
+    screen_width: int = 0,
+    screen_height: int = 0,
+) -> tuple[BBox, Center, str] | None:
     if not xml.strip() or not target.strip():
         return None
     try:
@@ -162,7 +182,7 @@ def _find_clickable_in_xml(xml: str, target: str) -> tuple[BBox, Center, str] | 
         return None
 
     target_lower = target.lower()
-    best: tuple[BBox, Center, str, int] | None = None
+    best: tuple[BBox, Center, str, float] | None = None
     for node in root.iter("node"):
         if node.attrib.get("clickable") != "true":
             continue
@@ -172,24 +192,29 @@ def _find_clickable_in_xml(xml: str, target: str) -> tuple[BBox, Center, str] | 
         if not label:
             continue
         label_lower = label.lower()
-        score = 0
+        score = 0.0
         if label_lower == target_lower:
-            score = 100
+            score = 100.0
         elif target_lower in label_lower or label_lower in target_lower:
-            score = 60
+            score = 60.0
         elif _title_matches_target(label, target):
-            score = 50
+            score = 50.0
         elif _fuzzy_close(label, target):
-            score = 45
+            score = 45.0
         else:
             continue
         bbox = parse_ui_bounds(node.attrib.get("bounds", ""))
         if not bbox or bbox.w < 8 or bbox.h < 8:
             continue
         center = center_from_bbox(bbox)
+        if hint_x is not None and hint_y is not None and screen_width > 0 and screen_height > 0:
+            dx = abs(center.x - hint_x) / screen_width
+            dy = abs(center.y - hint_y) / screen_height
+            distance_penalty = (dx + dy) * 40.0
+            score -= distance_penalty
         if best is None or score > best[3]:
             best = (bbox, center, label, score)
-    if best:
+    if best and best[3] >= 20.0:
         bbox, center, label, _ = best
         return bbox, center, label
     return None

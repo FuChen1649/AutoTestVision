@@ -37,6 +37,73 @@ _OVERFLOW_STEP_RE = re.compile(
     r"三个.*点|点状|竖.*点|ellipsis|overflow|更多选项|溢出|菜单按钮",
     re.I,
 )
+_LAUNCHER_CONTEXT_RE = re.compile(
+    r"主屏|桌面|home\s*screen|launcher|dock|主屏幕|回到桌面|返回桌面|"
+    r"打开|启动|开启|launch|start",
+    re.I,
+)
+_IN_APP_STEP_RE = re.compile(
+    r"tab|标签|页签|菜单|输入|搜索|按钮|列表|详情|键盘|拨号键|"
+    r"导航栏|toolbar|toolbar|弹窗|dialog|确认|取消|保存|删除|编辑|"
+    r"recents|contacts|favorites|keypad|通话记录|联系人|收藏|拨号盘",
+    re.I,
+)
+_COORD_HINT_MAX_DX = 0.38
+_COORD_HINT_MAX_DY = 0.38
+
+
+def _coords_near_hint(
+    hint_x: int | None,
+    hint_y: int | None,
+    center_x: int,
+    center_y: int,
+    *,
+    screen_width: int,
+    screen_height: int,
+    max_dx: float = _COORD_HINT_MAX_DX,
+    max_dy: float = _COORD_HINT_MAX_DY,
+) -> bool:
+    if hint_x is None or hint_y is None or screen_width <= 0 or screen_height <= 0:
+        return True
+    dx = abs(center_x - hint_x) / screen_width
+    dy = abs(center_y - hint_y) / screen_height
+    return dx <= max_dx and dy <= max_dy
+
+
+def _apply_ui_hit(
+    intent: ActionIntent,
+    center_x: int,
+    center_y: int,
+    *,
+    label: str,
+    reasoning: str,
+    screen_width: int,
+    screen_height: int,
+) -> ActionIntent:
+    if not _coords_near_hint(
+        intent.x,
+        intent.y,
+        center_x,
+        center_y,
+        screen_width=screen_width,
+        screen_height=screen_height,
+    ):
+        return intent.model_copy(
+            update={
+                "reasoning": (
+                    (intent.reasoning or "")
+                    + f"；uiautomator 命中「{label}」({center_x},{center_y}) 但与视觉坐标偏差过大，保留模型坐标"
+                )
+            }
+        )
+    return intent.model_copy(
+        update={
+            "x": center_x,
+            "y": center_y,
+            "confidence": max(intent.confidence, 0.92),
+            "reasoning": reasoning,
+        }
+    )
 
 
 def _guess_target_app(description: str) -> str | None:
@@ -71,25 +138,22 @@ def _extract_click_label(description: str) -> str | None:
 
 
 def _looks_like_launcher_tap(description: str) -> bool:
-    text = (description or "").lower()
-    if _guess_target_app(description):
+    text = (description or "").strip()
+    if not text:
+        return False
+    if _IN_APP_STEP_RE.search(text):
+        return False
+    target = _guess_target_app(text)
+    if not target:
+        return False
+    lower = text.lower()
+    if _LAUNCHER_CONTEXT_RE.search(text):
         return True
-    return any(
-        kw in text
-        for kw in (
-            "主屏",
-            "桌面",
-            "home",
-            "launcher",
-            "dock",
-            "左下",
-            "右下",
-            "底部",
-            "图标",
-            "icon",
-            "应用",
-        )
-    )
+    if any(kw in lower for kw in ("dock", "图标", "icon", "主屏", "桌面", "launcher")):
+        return True
+    if re.search(r"点击|点选|点按|tap|click", text, re.I) and not _IN_APP_STEP_RE.search(text):
+        return True
+    return False
 
 
 def _looks_like_overflow_menu(description: str) -> bool:
@@ -107,20 +171,21 @@ async def refine_tap_intent(
     if intent.action != "tap" or not serial:
         return intent
 
-    # 1) 主屏应用图标
+    # 1) 主屏应用图标（仅桌面/打开类步骤）
     if _looks_like_launcher_tap(step_description):
         target = _guess_target_app(step_description)
         if target:
             hit = await find_launcher_icon(serial, target)
             if hit:
                 _bbox, center, label = hit
-                return intent.model_copy(
-                    update={
-                        "x": center.x,
-                        "y": center.y,
-                        "confidence": max(intent.confidence, 0.92),
-                        "reasoning": f"uiautomator 定位「{label}」({center.x},{center.y})",
-                    }
+                return _apply_ui_hit(
+                    intent,
+                    center.x,
+                    center.y,
+                    label=label,
+                    reasoning=f"uiautomator 定位「{label}」({center.x},{center.y})",
+                    screen_width=screen_width,
+                    screen_height=screen_height,
                 )
 
     # 2) 右上角溢出菜单（⋮）
@@ -132,28 +197,37 @@ async def refine_tap_intent(
         )
         if hit:
             _bbox, center, label = hit
-            return intent.model_copy(
-                update={
-                    "x": center.x,
-                    "y": center.y,
-                    "confidence": max(intent.confidence, 0.92),
-                    "reasoning": f"uiautomator 溢出菜单「{label}」({center.x},{center.y})",
-                }
+            return _apply_ui_hit(
+                intent,
+                center.x,
+                center.y,
+                label=label,
+                reasoning=f"uiautomator 溢出菜单「{label}」({center.x},{center.y})",
+                screen_width=screen_width,
+                screen_height=screen_height,
             )
 
     # 3) 应用内按文本/content-desc 定位（Tab、按钮等）
     label = _extract_click_label(step_description)
     if label:
-        hit = await find_clickable_by_text(serial, label)
+        hit = await find_clickable_by_text(
+            serial,
+            label,
+            hint_x=intent.x,
+            hint_y=intent.y,
+            screen_width=screen_width,
+            screen_height=screen_height,
+        )
         if hit:
             _bbox, center, matched = hit
-            return intent.model_copy(
-                update={
-                    "x": center.x,
-                    "y": center.y,
-                    "confidence": max(intent.confidence, 0.92),
-                    "reasoning": f"uiautomator 文本「{matched}」({center.x},{center.y})",
-                }
+            return _apply_ui_hit(
+                intent,
+                center.x,
+                center.y,
+                label=matched,
+                reasoning=f"uiautomator 文本「{matched}」({center.x},{center.y})",
+                screen_width=screen_width,
+                screen_height=screen_height,
             )
 
     # 4) 模型坐标落在底部手势条附近：降置信度，避免误点
