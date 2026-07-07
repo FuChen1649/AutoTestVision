@@ -10,20 +10,15 @@ import "./AgentGeneratePage.css";
 
 type StepStatus = "pending" | "generating" | "ready" | "failed";
 
-interface PathLive {
+interface PathStepLive {
+  stepOrder: number;
+  description: string;
+  status: StepStatus;
   serial?: string;
   beforeImage?: string;
   beforeAnnotated?: string;
   afterImage?: string;
   scriptText?: string;
-}
-
-interface StepLive {
-  stepOrder: number;
-  description: string;
-  status: StepStatus;
-  position: PathLive;
-  code: PathLive;
 }
 
 function formatPositionScript(script: Record<string, unknown> | null | undefined): string {
@@ -43,31 +38,33 @@ function formatCodeScript(script: Record<string, unknown> | null | undefined): s
   return `${line}\n# ${script.reasoning ?? ""}`.trim();
 }
 
-function stepFromApi(step: CaseScriptsResponse["steps"][0]): StepLive {
+function positionStepFromApi(step: CaseScriptsResponse["steps"][0]): PathStepLive {
   return {
     stepOrder: step.step_order,
     description: step.description,
-    status: (step.script_status as StepStatus) ?? "pending",
-    position: {
-      scriptText: step.position_script
-        ? formatPositionScript(step.position_script as Record<string, unknown>)
-        : undefined,
-    },
-    code: {
-      scriptText: step.code_script
-        ? formatCodeScript(step.code_script as Record<string, unknown>)
-        : undefined,
-    },
+    status: step.position_script ? "ready" : ((step.script_status as StepStatus) ?? "pending"),
+    scriptText: step.position_script
+      ? formatPositionScript(step.position_script as Record<string, unknown>)
+      : undefined,
   };
 }
 
-function emptySteps(descriptions: { step_order: number; description: string }[]): StepLive[] {
+function codeStepFromApi(step: CaseScriptsResponse["steps"][0]): PathStepLive {
+  return {
+    stepOrder: step.step_order,
+    description: step.description,
+    status: step.code_script ? "ready" : ((step.script_status as StepStatus) ?? "pending"),
+    scriptText: step.code_script
+      ? formatCodeScript(step.code_script as Record<string, unknown>)
+      : undefined,
+  };
+}
+
+function emptyPathSteps(descriptions: { step_order: number; description: string }[]): PathStepLive[] {
   return descriptions.map((s) => ({
     stepOrder: s.step_order,
     description: s.description,
     status: "pending",
-    position: {},
-    code: {},
   }));
 }
 
@@ -75,7 +72,8 @@ export default function AgentGeneratePage() {
   const { caseId: caseIdParam } = useParams();
   const navigate = useNavigate();
   const stopStreamRef = useRef<(() => void) | null>(null);
-  const stepItemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const positionStepRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const codeStepRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
   const [cases, setCases] = useState<{ id: number; name: string }[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(
@@ -88,33 +86,48 @@ export default function AgentGeneratePage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProvider, setSelectedProvider] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [liveSteps, setLiveSteps] = useState<StepLive[]>([]);
-  const [selectedStepOrder, setSelectedStepOrder] = useState<number | null>(null);
-  const [activeStepOrder, setActiveStepOrder] = useState<number | null>(null);
-  const [logLine, setLogLine] = useState("");
+
+  const [positionSteps, setPositionSteps] = useState<PathStepLive[]>([]);
+  const [codeSteps, setCodeSteps] = useState<PathStepLive[]>([]);
+  const [positionSelectedOrder, setPositionSelectedOrder] = useState<number | null>(null);
+  const [codeSelectedOrder, setCodeSelectedOrder] = useState<number | null>(null);
+  const [positionActiveOrder, setPositionActiveOrder] = useState<number | null>(null);
+  const [codeActiveOrder, setCodeActiveOrder] = useState<number | null>(null);
+  const [positionLog, setPositionLog] = useState("");
+  const [codeLog, setCodeLog] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [liveExpanded, setLiveExpanded] = useState(true);
+  const [positionLiveExpanded, setPositionLiveExpanded] = useState(true);
+  const [codeLiveExpanded, setCodeLiveExpanded] = useState(true);
 
-  const scrollStepIntoView = useCallback((stepOrder: number) => {
-    const el = stepItemRefs.current.get(stepOrder);
-    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, []);
+  const scrollPathStep = useCallback(
+    (path: "position" | "code", stepOrder: number) => {
+      const el = (path === "position" ? positionStepRefs : codeStepRefs).current.get(stepOrder);
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    },
+    []
+  );
 
-  const advanceToNextStep = useCallback(
-    (completedOrder: number) => {
-      setLiveSteps((prev) => {
+  const advancePathStep = useCallback(
+    (path: "position" | "code", completedOrder: number) => {
+      const readSteps = path === "position" ? setPositionSteps : setCodeSteps;
+      readSteps((prev) => {
         const idx = prev.findIndex((s) => s.stepOrder === completedOrder);
         const next = idx >= 0 ? prev[idx + 1] : undefined;
         if (next) {
           window.setTimeout(() => {
-            setSelectedStepOrder(next.stepOrder);
-            scrollStepIntoView(next.stepOrder);
+            if (path === "position") {
+              setPositionSelectedOrder(next.stepOrder);
+              scrollPathStep("position", next.stepOrder);
+            } else {
+              setCodeSelectedOrder(next.stepOrder);
+              scrollPathStep("code", next.stepOrder);
+            }
           }, 200);
         }
         return prev;
       });
     },
-    [scrollStepIntoView]
+    [scrollPathStep]
   );
 
   const loadPrerequisites = useCallback(
@@ -168,8 +181,10 @@ export default function AgentGeneratePage() {
     try {
       const data = await scriptGenApi.getScripts(caseId);
       setScripts(data);
-      setLiveSteps(data.steps.map(stepFromApi));
-      setSelectedStepOrder((current) => current ?? data.steps[0]?.step_order ?? null);
+      setPositionSteps(data.steps.map(positionStepFromApi));
+      setCodeSteps(data.steps.map(codeStepFromApi));
+      setPositionSelectedOrder((c) => c ?? data.steps[0]?.step_order ?? null);
+      setCodeSelectedOrder((c) => c ?? data.steps[0]?.step_order ?? null);
     } catch (err) {
       if (!isApiOfflineError(err)) setError(err instanceof Error ? err.message : "加载脚本失败");
     }
@@ -194,11 +209,133 @@ export default function AgentGeneratePage() {
     }
   }, [selectedCaseId, loadScripts, navigate]);
 
-  const updateStep = useCallback((stepOrder: number, updater: (step: StepLive) => StepLive) => {
-    setLiveSteps((prev) =>
-      prev.map((s) => (s.stepOrder === stepOrder ? updater(s) : s))
-    );
-  }, []);
+  const updatePositionStep = useCallback(
+    (stepOrder: number, updater: (step: PathStepLive) => PathStepLive) => {
+      setPositionSteps((prev) => prev.map((s) => (s.stepOrder === stepOrder ? updater(s) : s)));
+    },
+    []
+  );
+
+  const updateCodeStep = useCallback(
+    (stepOrder: number, updater: (step: PathStepLive) => PathStepLive) => {
+      setCodeSteps((prev) => prev.map((s) => (s.stepOrder === stepOrder ? updater(s) : s)));
+    },
+    []
+  );
+
+  const applyPositionEvent = useCallback(
+    (name: string, stepOrder: number, detail: Record<string, unknown>, message: string) => {
+      setPositionLog(message || name);
+      setPositionActiveOrder(stepOrder);
+      if (name !== "position_executed") {
+        setPositionSelectedOrder(stepOrder);
+        scrollPathStep("position", stepOrder);
+      }
+
+      if (name === "position_step_start") {
+        updatePositionStep(stepOrder, (s) => ({
+          ...s,
+          status: "generating",
+          serial: String(detail.serial ?? positionSerial ?? s.serial ?? ""),
+        }));
+      }
+
+      if (name === "position_capture") {
+        updatePositionStep(stepOrder, (s) => ({
+          ...s,
+          serial: String(detail.serial ?? s.serial ?? ""),
+          beforeImage: String(detail.before_image ?? s.beforeImage ?? ""),
+        }));
+      }
+
+      if (name === "position_script_ready") {
+        updatePositionStep(stepOrder, (s) => ({
+          ...s,
+          status: "generating",
+          beforeImage: String(detail.before_image ?? s.beforeImage ?? ""),
+          beforeAnnotated: String(detail.before_image_annotated ?? s.beforeAnnotated ?? ""),
+          scriptText: formatPositionScript(detail.script as Record<string, unknown>),
+        }));
+      }
+
+      if (name === "position_executed") {
+        const execError = detail.exec_error ? String(detail.exec_error) : null;
+        updatePositionStep(stepOrder, (s) => ({
+          ...s,
+          status: execError ? "failed" : "ready",
+          serial: String(detail.serial ?? s.serial ?? ""),
+          afterImage: String(detail.after_image ?? s.afterImage ?? ""),
+          scriptText: execError
+            ? `${s.scriptText ?? "—"}\n\n⚠ 执行失败:\n${execError.slice(0, 400)}`
+            : s.scriptText,
+        }));
+        advancePathStep("position", stepOrder);
+      }
+
+      if (name === "position_error") {
+        updatePositionStep(stepOrder, (s) => ({ ...s, status: "failed" }));
+        setError(message || "Position 生成失败");
+      }
+    },
+    [advancePathStep, positionSerial, scrollPathStep, updatePositionStep]
+  );
+
+  const applyCodeEvent = useCallback(
+    (name: string, stepOrder: number, detail: Record<string, unknown>, message: string) => {
+      setCodeLog(message || name);
+      setCodeActiveOrder(stepOrder);
+      if (name !== "code_executed") {
+        setCodeSelectedOrder(stepOrder);
+        scrollPathStep("code", stepOrder);
+      }
+
+      if (name === "code_step_start") {
+        updateCodeStep(stepOrder, (s) => ({
+          ...s,
+          status: "generating",
+          serial: String(detail.serial ?? codeSerial ?? s.serial ?? ""),
+        }));
+      }
+
+      if (name === "code_capture") {
+        updateCodeStep(stepOrder, (s) => ({
+          ...s,
+          serial: String(detail.serial ?? s.serial ?? ""),
+          beforeImage: String(detail.before_image ?? s.beforeImage ?? ""),
+        }));
+      }
+
+      if (name === "code_script_ready") {
+        updateCodeStep(stepOrder, (s) => ({
+          ...s,
+          status: "generating",
+          beforeImage: String(detail.before_image ?? s.beforeImage ?? ""),
+          scriptText: formatCodeScript(detail.script as Record<string, unknown>),
+        }));
+      }
+
+      if (name === "code_executed") {
+        const execError = detail.exec_error ? String(detail.exec_error) : null;
+        const script = detail.script as Record<string, unknown> | undefined;
+        updateCodeStep(stepOrder, (s) => ({
+          ...s,
+          status: execError ? "failed" : "ready",
+          serial: String(detail.serial ?? s.serial ?? ""),
+          afterImage: String(detail.after_image ?? s.afterImage ?? ""),
+          scriptText: execError
+            ? `${s.scriptText ?? formatCodeScript(script)}\n\n⚠ 执行失败:\n${execError.slice(0, 400)}`
+            : s.scriptText ?? (script ? formatCodeScript(script) : undefined),
+        }));
+        advancePathStep("code", stepOrder);
+      }
+
+      if (name === "code_error") {
+        updateCodeStep(stepOrder, (s) => ({ ...s, status: "failed" }));
+        setError(message || "Code 生成失败");
+      }
+    },
+    [advancePathStep, codeSerial, scrollPathStep, updateCodeStep]
+  );
 
   const applyStreamEvent = useCallback(
     (event: Record<string, unknown>) => {
@@ -206,8 +343,6 @@ export default function AgentGeneratePage() {
       const stepOrder = event.step_order != null ? Number(event.step_order) : null;
       const detail = (event.detail ?? {}) as Record<string, unknown>;
       const message = String(event.message ?? "");
-
-      setLogLine(message || name);
 
       if (stepOrder == null) {
         if (name === "started") {
@@ -218,101 +353,21 @@ export default function AgentGeneratePage() {
         }
         if (name === "completed" || name === "error" || name === "cancelled") {
           setGenerating(false);
-          setActiveStepOrder(null);
+          setPositionActiveOrder(null);
+          setCodeActiveOrder(null);
         }
         return;
       }
 
-      setActiveStepOrder(stepOrder);
-      if (name !== "step_executed") {
-        setSelectedStepOrder(stepOrder);
-        scrollStepIntoView(stepOrder);
+      if (name.startsWith("position_")) {
+        applyPositionEvent(name, stepOrder, detail, message);
+        return;
       }
-
-      if (name === "step_start") {
-        updateStep(stepOrder, (s) => ({
-          ...s,
-          status: "generating",
-          position: { ...s.position, serial: positionSerial || s.position.serial },
-          code: { ...s.code, serial: codeSerial || s.code.serial },
-        }));
-      }
-
-      if (name === "capture_before") {
-        const pos = detail.position as Record<string, unknown> | undefined;
-        const code = detail.code as Record<string, unknown> | undefined;
-        updateStep(stepOrder, (s) => ({
-          ...s,
-          position: {
-            ...s.position,
-            serial: String(pos?.serial ?? s.position.serial ?? ""),
-            beforeImage: String(pos?.before_image ?? s.position.beforeImage ?? ""),
-          },
-          code: {
-            ...s.code,
-            serial: String(code?.serial ?? s.code.serial ?? ""),
-            beforeImage: String(code?.before_image ?? s.code.beforeImage ?? ""),
-          },
-        }));
-      }
-
-      if (name === "scripts_ready") {
-        const pos = detail.position as Record<string, unknown> | undefined;
-        const code = detail.code as Record<string, unknown> | undefined;
-        updateStep(stepOrder, (s) => ({
-          ...s,
-          status: "generating",
-          position: {
-            ...s.position,
-            beforeImage: String(pos?.before_image ?? s.position.beforeImage ?? ""),
-            beforeAnnotated: String(pos?.before_image_annotated ?? s.position.beforeAnnotated ?? ""),
-            scriptText: formatPositionScript(pos?.script as Record<string, unknown>),
-          },
-          code: {
-            ...s.code,
-            beforeImage: String(code?.before_image ?? s.code.beforeImage ?? ""),
-            scriptText: formatCodeScript(code?.script as Record<string, unknown>),
-          },
-        }));
-      }
-
-      if (name === "step_executed") {
-        const pos = detail.position as Record<string, unknown> | undefined;
-        const code = detail.code as Record<string, unknown> | undefined;
-        const posExecError = pos?.exec_error ? String(pos.exec_error) : null;
-        const codeExecError = code?.exec_error ? String(code.exec_error) : null;
-        const codeScript = code?.script as Record<string, unknown> | undefined;
-        updateStep(stepOrder, (s) => ({
-          ...s,
-          status: "ready",
-          position: {
-            ...s.position,
-            serial: String(pos?.serial ?? s.position.serial ?? ""),
-            afterImage: String(pos?.after_image ?? s.position.afterImage ?? ""),
-            scriptText: posExecError
-              ? `${s.position.scriptText ?? "—"}\n\n⚠ 执行失败:\n${posExecError.slice(0, 400)}`
-              : s.position.scriptText,
-          },
-          code: {
-            ...s.code,
-            serial: String(code?.serial ?? s.code.serial ?? ""),
-            afterImage: String(code?.after_image ?? s.code.afterImage ?? ""),
-            scriptText: codeExecError
-              ? `${s.code.scriptText ?? formatCodeScript(codeScript)}\n\n⚠ 执行失败:\n${codeExecError.slice(0, 400)}`
-              : s.code.scriptText ?? (codeScript ? formatCodeScript(codeScript) : undefined),
-          },
-        }));
-        advanceToNextStep(stepOrder);
-      }
-
-      if (name === "error") {
-        updateStep(stepOrder, (s) => ({ ...s, status: "failed" }));
-        setGenerating(false);
-        setActiveStepOrder(null);
-        setError(message || "生成失败");
+      if (name.startsWith("code_")) {
+        applyCodeEvent(name, stepOrder, detail, message);
       }
     },
-    [advanceToNextStep, codeSerial, positionSerial, scrollStepIntoView, updateStep]
+    [applyCodeEvent, applyPositionEvent]
   );
 
   const canGenerate = Boolean(
@@ -327,13 +382,25 @@ export default function AgentGeneratePage() {
     if (!selectedCaseId || generating || !canGenerate || !scripts) return;
     setGenerating(true);
     setError(null);
-    setLogLine("启动生成…");
+    setPositionLog("Position 路径启动…");
+    setCodeLog("Code 路径启动…");
     stopStreamRef.current?.();
-    setLiveSteps(emptySteps(scripts.steps.map((s) => ({ step_order: s.step_order, description: s.description }))));
+
+    const descriptions = scripts.steps.map((s) => ({
+      step_order: s.step_order,
+      description: s.description,
+    }));
+    setPositionSteps(emptyPathSteps(descriptions));
+    setCodeSteps(emptyPathSteps(descriptions));
+
     const firstOrder = scripts.steps[0]?.step_order;
     if (firstOrder != null) {
-      setSelectedStepOrder(firstOrder);
-      window.setTimeout(() => scrollStepIntoView(firstOrder), 100);
+      setPositionSelectedOrder(firstOrder);
+      setCodeSelectedOrder(firstOrder);
+      window.setTimeout(() => {
+        scrollPathStep("position", firstOrder);
+        scrollPathStep("code", firstOrder);
+      }, 100);
     }
 
     try {
@@ -356,14 +423,25 @@ export default function AgentGeneratePage() {
 
   useEffect(() => () => stopStreamRef.current?.(), []);
 
-  const viewStepOrder = selectedStepOrder ?? activeStepOrder ?? liveSteps[0]?.stepOrder ?? null;
-  const viewStep = useMemo(
-    () => liveSteps.find((s) => s.stepOrder === viewStepOrder) ?? null,
-    [liveSteps, viewStepOrder]
+  const positionViewOrder =
+    positionSelectedOrder ?? positionActiveOrder ?? positionSteps[0]?.stepOrder ?? null;
+  const codeViewOrder = codeSelectedOrder ?? codeActiveOrder ?? codeSteps[0]?.stepOrder ?? null;
+
+  const positionViewStep = useMemo(
+    () => positionSteps.find((s) => s.stepOrder === positionViewOrder) ?? null,
+    [positionSteps, positionViewOrder]
+  );
+  const codeViewStep = useMemo(
+    () => codeSteps.find((s) => s.stepOrder === codeViewOrder) ?? null,
+    [codeSteps, codeViewOrder]
   );
 
-  const progressText = generating && activeStepOrder != null
-    ? `正在生成步骤 ${activeStepOrder + 1} / ${liveSteps.length}`
+  const positionDone = positionSteps.filter((s) => s.status === "ready").length;
+  const codeDone = codeSteps.filter((s) => s.status === "ready").length;
+  const totalSteps = positionSteps.length;
+
+  const progressText = generating
+    ? `Pos ${positionDone}/${totalSteps} · Code ${codeDone}/${totalSteps}`
     : scripts?.script_status
       ? `脚本状态 · ${scripts.script_status}`
       : "";
@@ -437,37 +515,110 @@ export default function AgentGeneratePage() {
           title={prerequisites?.message}
         >
           {prerequisites?.ready
-            ? `双设备并行 · Pos ${positionSerial.slice(-6)} · Code ${codeSerial.slice(-6)}`
+            ? `双路径并行 · Pos ${positionSerial.slice(-6)} · Code ${codeSerial.slice(-6)}`
             : `${prerequisites?.device_count ?? 0}/2 台 · ${prerequisites?.message ?? "检测中"}`}
           {progressText ? ` · ${progressText}` : ""}
         </div>
-        <button
-          className="platform-btn"
-          type="button"
-          onClick={() => setLiveExpanded((v) => !v)}
-          title={liveExpanded ? "收起实时画面，腾出步骤区域" : "展开实时画面"}
-        >
-          {liveExpanded ? "收起实时" : "展开实时"}
-        </button>
       </div>
 
-      {error && <div className="platform-error" style={{ marginBottom: 8, padding: "8px 10px" }}>{error}</div>}
+      {error && (
+        <div className="platform-error" style={{ marginBottom: 8, padding: "8px 10px" }}>
+          {error}
+        </div>
+      )}
 
-      <div className="dual-gen-layout">
+      <div className="dual-gen-split">
+        <PathColumn
+          title="Position"
+          tint="#3b82f6"
+          steps={positionSteps}
+          viewStep={positionViewStep}
+          viewOrder={positionViewOrder}
+          activeOrder={positionActiveOrder}
+          liveSerial={positionSerial || positionViewStep?.serial}
+          liveExpanded={positionLiveExpanded}
+          onToggleLive={() => setPositionLiveExpanded((v) => !v)}
+          logLine={positionLog}
+          showAnnotated
+          stepRefs={positionStepRefs}
+          onSelectStep={(order) => {
+            setPositionSelectedOrder(order);
+            scrollPathStep("position", order);
+          }}
+        />
+        <PathColumn
+          title="Code"
+          tint="#10b981"
+          steps={codeSteps}
+          viewStep={codeViewStep}
+          viewOrder={codeViewOrder}
+          activeOrder={codeActiveOrder}
+          liveSerial={codeSerial || codeViewStep?.serial}
+          liveExpanded={codeLiveExpanded}
+          onToggleLive={() => setCodeLiveExpanded((v) => !v)}
+          logLine={codeLog}
+          stepRefs={codeStepRefs}
+          onSelectStep={(order) => {
+            setCodeSelectedOrder(order);
+            scrollPathStep("code", order);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PathColumn({
+  title,
+  tint,
+  steps,
+  viewStep,
+  viewOrder,
+  activeOrder,
+  liveSerial,
+  liveExpanded,
+  onToggleLive,
+  logLine,
+  showAnnotated,
+  stepRefs,
+  onSelectStep,
+}: {
+  title: string;
+  tint: string;
+  steps: PathStepLive[];
+  viewStep: PathStepLive | null;
+  viewOrder: number | null;
+  activeOrder: number | null;
+  liveSerial?: string | null;
+  liveExpanded: boolean;
+  onToggleLive: () => void;
+  logLine: string;
+  showAnnotated?: boolean;
+  stepRefs: React.MutableRefObject<Map<number, HTMLButtonElement>>;
+  onSelectStep: (order: number) => void;
+}) {
+  const beforeSrc =
+    showAnnotated && viewStep?.beforeAnnotated ? viewStep.beforeAnnotated : viewStep?.beforeImage;
+
+  return (
+    <div className="dual-gen-column">
+      <div className="dual-gen-column-head" style={{ borderColor: tint }}>
+        <strong style={{ color: tint }}>{title}</strong>
+        <span>{liveSerial ?? "—"}</span>
+      </div>
+
+      <div className="dual-gen-column-body">
         <div className="dual-gen-steps">
-          {liveSteps.map((step) => (
+          {steps.map((step) => (
             <button
               key={step.stepOrder}
               ref={(el) => {
-                if (el) stepItemRefs.current.set(step.stepOrder, el);
-                else stepItemRefs.current.delete(step.stepOrder);
+                if (el) stepRefs.current.set(step.stepOrder, el);
+                else stepRefs.current.delete(step.stepOrder);
               }}
               type="button"
-              className={`dual-gen-step-item ${viewStepOrder === step.stepOrder ? "active" : ""} ${activeStepOrder === step.stepOrder ? "running" : ""}`}
-              onClick={() => {
-                setSelectedStepOrder(step.stepOrder);
-                scrollStepIntoView(step.stepOrder);
-              }}
+              className={`dual-gen-step-item ${viewOrder === step.stepOrder ? "active" : ""} ${activeOrder === step.stepOrder ? "running" : ""}`}
+              onClick={() => onSelectStep(step.stepOrder)}
             >
               <div className="dual-gen-step-meta">
                 <span className={`dual-gen-dot ${step.status}`} />
@@ -479,95 +630,48 @@ export default function AgentGeneratePage() {
           ))}
         </div>
 
-        <div className="dual-gen-main">
+        <div className="dual-gen-column-main">
           {viewStep && (
             <div className="dual-gen-nl">{viewStep.description || "（无描述）"}</div>
           )}
 
-          <div className="dual-gen-panels">
-            <DevicePanel
-              title="Position"
-              tint="#3b82f6"
-              path={viewStep?.position}
-              liveSerial={positionSerial || viewStep?.position.serial}
-              liveExpanded={liveExpanded}
-              onToggleLive={() => setLiveExpanded((v) => !v)}
-              showAnnotated
-            />
-            <DevicePanel
-              title="Code"
-              tint="#10b981"
-              path={viewStep?.code}
-              liveSerial={codeSerial || viewStep?.code.serial}
-              liveExpanded={liveExpanded}
-              onToggleLive={() => setLiveExpanded((v) => !v)}
-            />
+          <div className={`dual-gen-panel ${liveExpanded ? "" : "live-collapsed"}`}>
+            <div className="dual-gen-record">
+              <div className="dual-gen-shots">
+                <div className="dual-gen-shot">
+                  <label>{showAnnotated ? "执行前（标注）" : "执行前"}</label>
+                  {beforeSrc ? (
+                    <img src={beforeSrc} alt={`${title} before`} />
+                  ) : (
+                    <div className="dual-gen-shot-empty">等待截图</div>
+                  )}
+                </div>
+                <div className="dual-gen-shot">
+                  <label>执行后</label>
+                  {viewStep?.afterImage ? (
+                    <img src={viewStep.afterImage} alt={`${title} after`} />
+                  ) : (
+                    <div className="dual-gen-shot-empty">等待执行</div>
+                  )}
+                </div>
+              </div>
+              <div className="dual-gen-script">
+                <label>生成标准</label>
+                <pre>{viewStep?.scriptText ?? "—"}</pre>
+              </div>
+            </div>
+
+            <div className="dual-gen-live-wrap">
+              <button className="dual-gen-live-toggle" type="button" onClick={onToggleLive}>
+                <span>实时画面</span>
+                <span>{liveExpanded ? "▾ 收起" : "▸ 展开"}</span>
+              </button>
+              {liveExpanded && <DeviceLiveMirror serial={liveSerial ?? undefined} active={liveExpanded} />}
+            </div>
           </div>
 
           {logLine && <div className="dual-gen-log">{logLine}</div>}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function DevicePanel({
-  title,
-  tint,
-  path,
-  liveSerial,
-  liveExpanded,
-  onToggleLive,
-  showAnnotated,
-}: {
-  title: string;
-  tint: string;
-  path?: PathLive;
-  liveSerial?: string | null;
-  liveExpanded: boolean;
-  onToggleLive: () => void;
-  showAnnotated?: boolean;
-}) {
-  const beforeSrc = showAnnotated && path?.beforeAnnotated ? path.beforeAnnotated : path?.beforeImage;
-
-  return (
-    <div className={`dual-gen-panel ${liveExpanded ? "" : "live-collapsed"}`}>
-      <div className="dual-gen-panel-head">
-        <strong style={{ color: tint }}>{title}</strong>
-        <span>{liveSerial ?? path?.serial ?? "—"}</span>
-      </div>
-
-      <div className="dual-gen-record">
-        <div className="dual-gen-shots">
-          <div className="dual-gen-shot">
-            <label>{showAnnotated ? "执行前（标注）" : "执行前"}</label>
-            {beforeSrc ? (
-              <img src={beforeSrc} alt={`${title} before`} />
-            ) : (
-              <div className="dual-gen-shot-empty">等待截图</div>
-            )}
-          </div>
-          <div className="dual-gen-shot">
-            <label>执行后</label>
-            {path?.afterImage ? (
-              <img src={path.afterImage} alt={`${title} after`} />
-            ) : (
-              <div className="dual-gen-shot-empty">等待执行</div>
-            )}
-          </div>
-        </div>
-        <div className="dual-gen-script">
-          <label>生成标准</label>
-          <pre>{path?.scriptText ?? "—"}</pre>
-        </div>
-      </div>
-
-      <div className="dual-gen-live-wrap">
-        <button className="dual-gen-live-toggle" type="button" onClick={onToggleLive}>
-          <span>实时画面</span>
-          <span>{liveExpanded ? "▾ 收起" : "▸ 展开"}</span>
-        </button>
-        {liveExpanded && <DeviceLiveMirror serial={liveSerial ?? undefined} active={liveExpanded} />}
       </div>
     </div>
   );

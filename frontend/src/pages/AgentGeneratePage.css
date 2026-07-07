@@ -50,6 +50,77 @@
   overflow: hidden;
 }
 
+.dual-gen-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dual-gen-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0b1220;
+  overflow: hidden;
+}
+
+.dual-gen-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 2px solid #1f2937;
+  background: #111827;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.dual-gen-column-head span {
+  color: #6b7280;
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dual-gen-column-body {
+  display: grid;
+  grid-template-columns: 148px 1fr;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dual-gen-column-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.dual-gen-column .dual-gen-steps {
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid #1f2937;
+}
+
+.dual-gen-column .dual-gen-panel {
+  flex: 1;
+  min-height: 0;
+}
+
 .dual-gen-steps {
   border: 1px solid #1f2937;
   border-radius: 8px;
@@ -348,6 +419,23 @@
   overflow: auto;
   font-family: ui-monospace, monospace;
   flex-shrink: 0;
+}
+
+@media (max-width: 1200px) {
+  .dual-gen-split {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .dual-gen-column-body {
+    grid-template-columns: 1fr;
+  }
+
+  .dual-gen-column .dual-gen-steps {
+    max-height: 140px;
+    border-right: none;
+    border-bottom: 1px solid #1f2937;
+  }
 }
 
 @media (max-width: 960px) {

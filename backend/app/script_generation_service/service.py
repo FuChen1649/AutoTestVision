@@ -27,7 +27,7 @@ from app.models.case import Case, CaseStep
 from app.agent_test_service.tools import agent_tools, is_tool_step
 from app.platform_service.task_log import append_platform_task_log
 from app.platform_service.task_service import register_platform_task, sync_task_status
-from app.script_generation_service.registry import script_gen_registry
+from app.script_generation_service.registry import ScriptGenRuntime, script_gen_registry
 from app.services.adb import adb_service
 
 logger = get_agent_logger()
@@ -288,12 +288,13 @@ class ScriptGenerationService:
             code_step.ui_xml = ui_xml
         if before_image and generated.code_line:
             device_w, device_h = await action_executor.get_device_screen_size(code_run.serial)
-            annotated = annotate_code_before_image(
+            annotated = await annotate_code_before_image(
                 before_image,
                 generated.code_line,
                 ui_xml=ui_xml,
                 device_width=device_w,
                 device_height=device_h,
+                serial=code_run.serial,
             )
             if annotated:
                 code_step.before_image_annotated = annotated
@@ -306,6 +307,401 @@ class ScriptGenerationService:
             step_order=step_order,
             detail={"error": exec_error, "code_line": generated.code_line} if exec_error else {"code_line": generated.code_line},
         )
+
+    async def _get_case_step(self, db: AsyncSession, case_id: int, step_order: int) -> CaseStep:
+        result = await db.execute(
+            select(CaseStep).where(CaseStep.case_id == case_id, CaseStep.step_order == step_order)
+        )
+        step = result.scalar_one_or_none()
+        if not step:
+            raise RuntimeError(f"Case 步骤 {step_order} 不存在")
+        return step
+
+    async def _sync_step_script_status(
+        self, db: AsyncSession, case_id: int, step_order: int, *, failed: bool = False
+    ) -> None:
+        step = await self._get_case_step(db, case_id, step_order)
+        if failed:
+            step.script_status = "failed"
+        elif step.position_script_json and step.code_script_json:
+            step.script_status = "ready"
+            if not step.script_generated_at:
+                step.script_generated_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    async def _run_position_pipeline(
+        self,
+        *,
+        task_uuid: str,
+        case_id: int,
+        run_uuid: str,
+        serial: str,
+        llm_provider: str | None,
+        total: int,
+        runtime: ScriptGenRuntime | None,
+    ) -> bool:
+        failed = False
+        async with async_session() as db:
+            case = await self._load_case(db, case_id)
+            natural_steps = [s for s in case.steps if not is_tool_step(s.step_type)]
+            pos_run = await agent_repository.get_run_by_uuid(db, run_uuid)
+            assert pos_run is not None
+
+            for index, step in enumerate(natural_steps):
+                if runtime and runtime.cancelled:
+                    await sync_task_status(db, task_uuid, status="cancelled", commit=True)
+                    await self._emit(task_uuid, "cancelled", case_id, message="Position 路径已取消")
+                    return failed
+
+                step_row = await self._get_case_step(db, case_id, step.step_order)
+                step_row.script_status = "generating"
+                await db.commit()
+
+                await self._emit(
+                    task_uuid,
+                    "position_step_start",
+                    case_id,
+                    step_order=step.step_order,
+                    message=step.description[:120] or f"Position 步骤 {step.step_order + 1}",
+                    detail={"description": step.description, "serial": serial},
+                )
+
+                try:
+                    pos_image, pos_w, pos_h = await action_executor.capture_screen(serial)
+                    await self._emit(
+                        task_uuid,
+                        "position_capture",
+                        case_id,
+                        step_order=step.step_order,
+                        message="Position 已截取执行前屏幕",
+                        detail={
+                            "serial": serial,
+                            "before_image": pos_image,
+                            "width": pos_w,
+                            "height": pos_h,
+                        },
+                    )
+
+                    intent_request = AnalyzeIntentRequest(
+                        step_description=step.description,
+                        screen_image=pos_image,
+                        screen_width=pos_w,
+                        screen_height=pos_h,
+                        llm_provider=llm_provider,
+                    )
+                    intent = await intent_analyzer.analyze(intent_request, provider=llm_provider)
+                    refined_intent = await refine_tap_intent(
+                        intent,
+                        step_description=step.description,
+                        serial=serial,
+                        screen_height=pos_h,
+                        screen_width=pos_w,
+                    )
+
+                    step_row = await self._get_case_step(db, case_id, step.step_order)
+                    step_row.position_script_json = refined_intent.model_dump_json()
+                    await db.commit()
+
+                    pos_before_annotated = annotate_before_image(pos_image, refined_intent)
+                    await self._emit(
+                        task_uuid,
+                        "position_script_ready",
+                        case_id,
+                        step_order=step.step_order,
+                        message="Position 脚本已生成",
+                        detail={
+                            "serial": serial,
+                            "before_image": pos_image,
+                            "before_image_annotated": pos_before_annotated,
+                            "script": refined_intent.model_dump(),
+                        },
+                    )
+
+                    await self._emit(
+                        task_uuid,
+                        "position_executing",
+                        case_id,
+                        step_order=step.step_order,
+                        message=f"Position 设备执行 {serial}",
+                        detail={"serial": serial},
+                    )
+
+                    pos_after = pos_image
+                    pos_exec_error: str | None = None
+                    if refined_intent.action != "skip":
+                        try:
+                            pos_dw, pos_dh = await action_executor.get_device_screen_size(serial)
+                            mapped = action_executor.map_coordinates(
+                                refined_intent,
+                                image_width=pos_w,
+                                image_height=pos_h,
+                                device_width=pos_dw,
+                                device_height=pos_dh,
+                            )
+                            await action_executor.execute(mapped, serial=serial)
+                            pos_after, _, _ = await action_executor.capture_after_screen(serial)
+                        except Exception as exc:
+                            pos_exec_error = str(exc)[-400:]
+                            logger.warning(
+                                "[script_gen] Position 设备执行失败 step=%d serial=%s: %s",
+                                step.step_order,
+                                serial,
+                                exc,
+                            )
+
+                    pos_run = await agent_repository.get_run_by_uuid(db, run_uuid)
+                    assert pos_run is not None
+                    await self._persist_position_step(
+                        db,
+                        pos_run,
+                        step_order=step.step_order,
+                        before_image=pos_image,
+                        before_annotated=pos_before_annotated,
+                        after_image=pos_after,
+                        intent=refined_intent,
+                        exec_error=pos_exec_error,
+                    )
+                    await agent_repository.update_run_fields(
+                        db, pos_run, current_step_index=step.step_order + 1
+                    )
+                    await self._sync_step_script_status(
+                        db, case_id, step.step_order, failed=bool(pos_exec_error)
+                    )
+
+                    await self._emit(
+                        task_uuid,
+                        "position_executed",
+                        case_id,
+                        step_order=step.step_order,
+                        message=(
+                            f"Position 步骤 {step.step_order + 1} 完成"
+                            if not pos_exec_error
+                            else f"Position 步骤 {step.step_order + 1} 执行失败"
+                        ),
+                        detail={
+                            "serial": serial,
+                            "after_image": pos_after,
+                            "exec_error": pos_exec_error,
+                        },
+                    )
+                    if pos_exec_error:
+                        failed = True
+                except Exception as exc:
+                    failed = True
+                    step_row = await self._get_case_step(db, case_id, step.step_order)
+                    step_row.script_status = "failed"
+                    await db.commit()
+                    await self._emit(
+                        task_uuid,
+                        "position_error",
+                        case_id,
+                        step_order=step.step_order,
+                        message=str(exc),
+                    )
+                    return failed
+
+                await sync_task_status(
+                    db,
+                    task_uuid,
+                    progress={
+                        "position_completed_steps": index + 1,
+                        "total_steps": total,
+                        "message": f"Position 已完成 {index + 1}/{total} 步",
+                    },
+                    commit=True,
+                )
+        return failed
+
+    async def _run_code_pipeline(
+        self,
+        *,
+        task_uuid: str,
+        case_id: int,
+        run_uuid: str,
+        serial: str,
+        llm_provider: str | None,
+        total: int,
+        runtime: ScriptGenRuntime | None,
+    ) -> bool:
+        failed = False
+        async with async_session() as db:
+            case = await self._load_case(db, case_id)
+            natural_steps = [s for s in case.steps if not is_tool_step(s.step_type)]
+            code_run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
+            assert code_run is not None
+
+            for index, step in enumerate(natural_steps):
+                if runtime and runtime.cancelled:
+                    await sync_task_status(db, task_uuid, status="cancelled", commit=True)
+                    await self._emit(task_uuid, "cancelled", case_id, message="Code 路径已取消")
+                    return failed
+
+                step_row = await self._get_case_step(db, case_id, step.step_order)
+                if step_row.script_status != "failed":
+                    step_row.script_status = "generating"
+                await db.commit()
+
+                await self._emit(
+                    task_uuid,
+                    "code_step_start",
+                    case_id,
+                    step_order=step.step_order,
+                    message=step.description[:120] or f"Code 步骤 {step.step_order + 1}",
+                    detail={"description": step.description, "serial": serial},
+                )
+
+                try:
+                    code_image, code_w, code_h = await action_executor.capture_screen(serial)
+                    ui_xml = await dump_ui_xml_async(serial)
+                    await self._emit(
+                        task_uuid,
+                        "code_capture",
+                        case_id,
+                        step_order=step.step_order,
+                        message="Code 已截取执行前屏幕",
+                        detail={
+                            "serial": serial,
+                            "before_image": code_image,
+                            "width": code_w,
+                            "height": code_h,
+                        },
+                    )
+
+                    code_request = AnalyzeCodeRequest(
+                        step_description=step.description,
+                        screen_image=code_image,
+                        screen_width=code_w,
+                        screen_height=code_h,
+                        ui_xml=ui_xml,
+                        llm_provider=llm_provider,
+                    )
+                    generated = await code_generator.analyze(code_request, provider=llm_provider)
+                    generated.template_path = str(
+                        render_step_test_file(
+                            run_uuid=task_uuid,
+                            step_order=step.step_order,
+                            description=step.description,
+                            serial=serial,
+                            code_line=generated.code_line,
+                        )
+                    )
+
+                    step_row = await self._get_case_step(db, case_id, step.step_order)
+                    step_row.code_script_json = generated.model_dump_json()
+                    await db.commit()
+
+                    await self._emit(
+                        task_uuid,
+                        "code_script_ready",
+                        case_id,
+                        step_order=step.step_order,
+                        message="Code 脚本已生成",
+                        detail={
+                            "serial": serial,
+                            "before_image": code_image,
+                            "script": generated.model_dump(),
+                        },
+                    )
+
+                    await self._emit(
+                        task_uuid,
+                        "code_executing",
+                        case_id,
+                        step_order=step.step_order,
+                        message=f"Code 设备执行 {serial}",
+                        detail={"serial": serial},
+                    )
+
+                    code_after = code_image
+                    code_exec_error: str | None = None
+                    line = (generated.code_line or "").strip()
+                    if line and line != "d.sleep(0.5)":
+                        try:
+                            exec_result = await code_executor.execute(
+                                line,
+                                serial=serial,
+                                test_file=None,
+                            )
+                            generated.execution_output = exec_result.execution_output
+                            generated.pytest_exit_code = exec_result.pytest_exit_code
+                            generated.confidence = exec_result.confidence
+                            generated.reasoning = exec_result.reasoning
+                            if exec_result.pytest_exit_code not in (None, 0):
+                                code_exec_error = (exec_result.execution_output or "Code 执行失败")[-400:]
+                            else:
+                                code_after, _, _ = await action_executor.capture_after_screen(serial)
+                        except Exception as exc:
+                            code_exec_error = str(exc)[-400:]
+                            logger.warning(
+                                "[script_gen] Code 设备执行异常 step=%d serial=%s: %s",
+                                step.step_order,
+                                serial,
+                                exc,
+                            )
+
+                    code_run = await agent_code_repository.get_run_by_uuid(db, run_uuid)
+                    assert code_run is not None
+                    await self._persist_code_step(
+                        db,
+                        code_run,
+                        step_order=step.step_order,
+                        before_image=code_image,
+                        after_image=code_after,
+                        generated=generated,
+                        exec_error=code_exec_error,
+                        ui_xml=ui_xml,
+                    )
+                    await agent_code_repository.update_run_fields(
+                        db, code_run, current_step_index=step.step_order + 1
+                    )
+                    await self._sync_step_script_status(
+                        db, case_id, step.step_order, failed=bool(code_exec_error)
+                    )
+
+                    await self._emit(
+                        task_uuid,
+                        "code_executed",
+                        case_id,
+                        step_order=step.step_order,
+                        message=(
+                            f"Code 步骤 {step.step_order + 1} 完成"
+                            if not code_exec_error
+                            else f"Code 步骤 {step.step_order + 1} 执行失败"
+                        ),
+                        detail={
+                            "serial": serial,
+                            "after_image": code_after,
+                            "exec_error": code_exec_error,
+                            "script": generated.model_dump(),
+                        },
+                    )
+                    if code_exec_error:
+                        failed = True
+                except Exception as exc:
+                    failed = True
+                    step_row = await self._get_case_step(db, case_id, step.step_order)
+                    step_row.script_status = "failed"
+                    await db.commit()
+                    await self._emit(
+                        task_uuid,
+                        "code_error",
+                        case_id,
+                        step_order=step.step_order,
+                        message=str(exc),
+                    )
+                    return failed
+
+                await sync_task_status(
+                    db,
+                    task_uuid,
+                    progress={
+                        "code_completed_steps": index + 1,
+                        "total_steps": total,
+                        "message": f"Code 已完成 {index + 1}/{total} 步",
+                    },
+                    commit=True,
+                )
+        return failed
 
     async def _finalize_dual_runs(
         self,
@@ -488,294 +884,33 @@ class ScriptGenerationService:
             code_run = await agent_code_repository.get_run_by_uuid(db, code_run.run_uuid)
             assert pos_run is not None and code_run is not None
 
-            generation_failed = False
-            for index, step in enumerate(natural_steps):
-                if runtime and runtime.cancelled:
-                    await sync_task_status(db, task_uuid, status="cancelled", commit=True)
-                    await self._emit(task_uuid, "cancelled", case_id, message="已取消")
-                    return
+            pos_run_uuid = pos_run.run_uuid
+            code_run_uuid = code_run.run_uuid
 
-                await self._update_step_status(db, step, "generating")
-                await self._emit(
-                    task_uuid,
-                    "step_start",
-                    case_id,
-                    step_order=step.step_order,
-                    message=step.description[:120] or f"步骤 {step.step_order + 1}",
-                    detail={"description": step.description},
-                )
-                await sync_task_status(
-                    db,
-                    task_uuid,
-                    progress={
-                        "completed_steps": index,
-                        "total_steps": total,
-                        "current_step": step.step_order,
-                        "message": f"生成步骤 {step.step_order + 1}",
-                    },
-                    commit=True,
-                )
-
-                try:
-                    if is_tool_step(step.step_type):
-                        await self._handle_tool_step(
-                            db, step, position_serial, code_serial, task_uuid, case_id
-                        )
-                        continue
-
-                    pos_image, pos_w, pos_h = await action_executor.capture_screen(position_serial)
-                    code_image, code_w, code_h = await action_executor.capture_screen(code_serial)
-                    ui_xml = await dump_ui_xml_async(code_serial)
-
-                    await self._emit(
-                        task_uuid,
-                        "capture_before",
-                        case_id,
-                        step_order=step.step_order,
-                        message="已截取双设备执行前屏幕",
-                        detail={
-                            "position": {
-                                "serial": position_serial,
-                                "before_image": pos_image,
-                                "width": pos_w,
-                                "height": pos_h,
-                            },
-                            "code": {
-                                "serial": code_serial,
-                                "before_image": code_image,
-                                "width": code_w,
-                                "height": code_h,
-                            },
-                        },
-                    )
-
-                    intent_request = AnalyzeIntentRequest(
-                        step_description=step.description,
-                        screen_image=pos_image,
-                        screen_width=pos_w,
-                        screen_height=pos_h,
-                        llm_provider=llm_provider,
-                    )
-                    code_request = AnalyzeCodeRequest(
-                        step_description=step.description,
-                        screen_image=code_image,
-                        screen_width=code_w,
-                        screen_height=code_h,
-                        ui_xml=ui_xml,
-                        llm_provider=llm_provider,
-                    )
-
-                    intent, generated = await asyncio.gather(
-                        intent_analyzer.analyze(intent_request, provider=llm_provider),
-                        code_generator.analyze(code_request, provider=llm_provider),
-                    )
-
-                    refined_intent = await refine_tap_intent(
-                        intent,
-                        step_description=step.description,
-                        serial=position_serial,
-                        screen_height=pos_h,
-                        screen_width=pos_w,
-                    )
-
-                    step.position_script_json = refined_intent.model_dump_json()
-                    generated.template_path = str(
-                        render_step_test_file(
-                            run_uuid=task_uuid,
-                            step_order=step.step_order,
-                            description=step.description,
-                            serial=code_serial,
-                            code_line=generated.code_line,
-                        )
-                    )
-                    step.code_script_json = generated.model_dump_json()
-                    step.script_generated_at = datetime.now(timezone.utc)
-                    step.script_status = "ready"
-                    await db.commit()
-
-                    pos_before_annotated = annotate_before_image(pos_image, refined_intent)
-
-                    await self._emit(
-                        task_uuid,
-                        "scripts_ready",
-                        case_id,
-                        step_order=step.step_order,
-                        message="双脚本已生成",
-                        detail={
-                            "position": {
-                                "serial": position_serial,
-                                "before_image": pos_image,
-                                "before_image_annotated": pos_before_annotated,
-                                "script": refined_intent.model_dump(),
-                            },
-                            "code": {
-                                "serial": code_serial,
-                                "before_image": code_image,
-                                "script": generated.model_dump(),
-                            },
-                        },
-                    )
-
-                    async def execute_on_position() -> tuple[str, str | None]:
-                        if refined_intent.action == "skip":
-                            return pos_image, None
-                        try:
-                            pos_dw, pos_dh = await action_executor.get_device_screen_size(position_serial)
-                            mapped = action_executor.map_coordinates(
-                                refined_intent,
-                                image_width=pos_w,
-                                image_height=pos_h,
-                                device_width=pos_dw,
-                                device_height=pos_dh,
-                            )
-                            logger.info(
-                                "[script_gen] Position 执行 step=%d serial=%s raw=(%s,%s) mapped=(%s,%s) image=%dx%d device=%dx%d",
-                                step.step_order,
-                                position_serial,
-                                refined_intent.x,
-                                refined_intent.y,
-                                mapped.x,
-                                mapped.y,
-                                pos_w,
-                                pos_h,
-                                pos_dw,
-                                pos_dh,
-                            )
-                            await action_executor.execute(mapped, serial=position_serial)
-                            after, _, _ = await action_executor.capture_after_screen(position_serial)
-                            return after, None
-                        except Exception as exc:
-                            logger.warning(
-                                "[script_gen] Position 设备执行失败 step=%d serial=%s: %s",
-                                step.step_order,
-                                position_serial,
-                                exc,
-                            )
-                            return pos_image, str(exc)[-400:]
-
-                    async def execute_on_code() -> tuple[str, str | None]:
-                        line = (generated.code_line or "").strip()
-                        if not line or line == "d.sleep(0.5)":
-                            return code_image, None
-                        try:
-                            exec_result = await code_executor.execute(
-                                line,
-                                serial=code_serial,
-                                test_file=None,
-                            )
-                            generated.execution_output = exec_result.execution_output
-                            generated.pytest_exit_code = exec_result.pytest_exit_code
-                            generated.confidence = exec_result.confidence
-                            generated.reasoning = exec_result.reasoning
-                            if exec_result.pytest_exit_code not in (None, 0):
-                                err = (exec_result.execution_output or "Code 执行失败")[-400:]
-                                logger.warning(
-                                    "[script_gen] Code 设备执行失败 step=%d serial=%s",
-                                    step.step_order,
-                                    code_serial,
-                                )
-                                return code_image, err
-                            after, _, _ = await action_executor.capture_after_screen(code_serial)
-                            return after, None
-                        except Exception as exc:
-                            logger.warning(
-                                "[script_gen] Code 设备执行异常 step=%d serial=%s: %s",
-                                step.step_order,
-                                code_serial,
-                                exc,
-                            )
-                            return code_image, str(exc)[-400:]
-
-                    await self._emit(
-                        task_uuid,
-                        "executing",
-                        case_id,
-                        step_order=step.step_order,
-                        message=f"双设备并行执行 Position={position_serial} Code={code_serial}",
-                        detail={
-                            "position_serial": position_serial,
-                            "code_serial": code_serial,
-                        },
-                    )
-
-                    (pos_after, pos_exec_error), (code_after, code_exec_error) = await asyncio.gather(
-                        execute_on_position(),
-                        execute_on_code(),
-                    )
-
-                    step.code_script_json = generated.model_dump_json()
-                    await self._persist_position_step(
-                        db,
-                        pos_run,
-                        step_order=step.step_order,
-                        before_image=pos_image,
-                        before_annotated=pos_before_annotated,
-                        after_image=pos_after,
-                        intent=refined_intent,
-                        exec_error=pos_exec_error,
-                    )
-                    await self._persist_code_step(
-                        db,
-                        code_run,
-                        step_order=step.step_order,
-                        before_image=code_image,
-                        after_image=code_after,
-                        generated=generated,
-                        exec_error=code_exec_error,
-                        ui_xml=ui_xml,
-                    )
-                    await agent_repository.update_run_fields(
-                        db, pos_run, current_step_index=step.step_order + 1
-                    )
-                    await agent_code_repository.update_run_fields(
-                        db, code_run, current_step_index=step.step_order + 1
-                    )
-                    await db.commit()
-
-                    parts = [f"步骤 {step.step_order + 1} 完成"]
-                    if pos_exec_error:
-                        parts.append(f"Position({position_serial}) 未通过")
-                    if code_exec_error:
-                        parts.append(f"Code({code_serial}) 未通过")
-
-                    await self._emit(
-                        task_uuid,
-                        "step_executed",
-                        case_id,
-                        step_order=step.step_order,
-                        message=" · ".join(parts),
-                        detail={
-                            "position": {
-                                "serial": position_serial,
-                                "after_image": pos_after,
-                                "exec_error": pos_exec_error,
-                            },
-                            "code": {
-                                "serial": code_serial,
-                                "after_image": code_after,
-                                "exec_error": code_exec_error,
-                                "script": generated.model_dump(),
-                            },
-                        },
-                    )
-                except Exception as exc:
-                    generation_failed = True
-                    step.script_status = "failed"
-                    await db.commit()
-                    await self._finalize_dual_runs(
-                        db, pos_run, code_run, completed_steps=index, failed=True
-                    )
-                    await sync_task_status(
-                        db, task_uuid, status="failed", error=str(exc), commit=True
-                    )
-                    await self._emit(
-                        task_uuid,
-                        "error",
-                        case_id,
-                        step_order=step.step_order,
-                        message=str(exc),
-                    )
-                    return
+            pos_failed, code_failed = await asyncio.gather(
+                self._run_position_pipeline(
+                    task_uuid=task_uuid,
+                    case_id=case_id,
+                    run_uuid=pos_run_uuid,
+                    serial=position_serial,
+                    llm_provider=llm_provider,
+                    total=total,
+                    runtime=runtime,
+                ),
+                self._run_code_pipeline(
+                    task_uuid=task_uuid,
+                    case_id=case_id,
+                    run_uuid=code_run_uuid,
+                    serial=code_serial,
+                    llm_provider=llm_provider,
+                    total=total,
+                    runtime=runtime,
+                ),
+            )
+            generation_failed = bool(pos_failed or code_failed)
+            pos_run = await agent_repository.get_run_by_uuid(db, pos_run_uuid)
+            code_run = await agent_code_repository.get_run_by_uuid(db, code_run_uuid)
+            assert pos_run is not None and code_run is not None
 
             await self._finalize_dual_runs(
                 db, pos_run, code_run, completed_steps=total, failed=generation_failed

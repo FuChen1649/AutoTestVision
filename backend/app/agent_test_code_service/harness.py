@@ -198,12 +198,13 @@ async def execute_code_node(state: CodeHarnessState) -> CodeHarnessState:
             else None
         )
         device_w, device_h = await action_executor.get_device_screen_size(state.get("serial"))
-        annotated = annotate_code_before_image(
+        annotated = await annotate_code_before_image(
             step.before_image,
             generated.code_line,
             ui_xml=state.get("ui_xml"),
             device_width=device_w,
             device_height=device_h,
+            serial=state.get("serial"),
             fallback_x=fallback_x,
             fallback_y=fallback_y,
         )
