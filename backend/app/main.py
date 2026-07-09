@@ -9,6 +9,7 @@ from app.config import settings
 from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
 from app.models import agent_code as _agent_code_models  # noqa: F401
+from app.models import case_assertion as _case_assertion_models  # noqa: F401
 from app.models import flywheel as _flywheel_models  # noqa: F401
 from app.models import monkey as _monkey_models  # noqa: F401
 from app.models import platform_log as _platform_log_models  # noqa: F401

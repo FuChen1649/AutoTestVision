@@ -14,6 +14,7 @@ interface PathStepLive {
   stepOrder: number;
   description: string;
   status: StepStatus;
+  isAssertion?: boolean;
   serial?: string;
   beforeImage?: string;
   beforeAnnotated?: string;
@@ -42,6 +43,7 @@ function positionStepFromApi(step: CaseScriptsResponse["steps"][0]): PathStepLiv
   return {
     stepOrder: step.step_order,
     description: step.description,
+    isAssertion: Boolean(step.is_assertion),
     status: step.position_script ? "ready" : ((step.script_status as StepStatus) ?? "pending"),
     scriptText: step.position_script
       ? formatPositionScript(step.position_script as Record<string, unknown>)
@@ -53,6 +55,7 @@ function codeStepFromApi(step: CaseScriptsResponse["steps"][0]): PathStepLive {
   return {
     stepOrder: step.step_order,
     description: step.description,
+    isAssertion: Boolean(step.is_assertion),
     status: step.code_script ? "ready" : ((step.script_status as StepStatus) ?? "pending"),
     scriptText: step.code_script
       ? formatCodeScript(step.code_script as Record<string, unknown>)
@@ -60,10 +63,13 @@ function codeStepFromApi(step: CaseScriptsResponse["steps"][0]): PathStepLive {
   };
 }
 
-function emptyPathSteps(descriptions: { step_order: number; description: string }[]): PathStepLive[] {
+function emptyPathSteps(
+  descriptions: { step_order: number; description: string; is_assertion?: boolean }[]
+): PathStepLive[] {
   return descriptions.map((s) => ({
     stepOrder: s.step_order,
     description: s.description,
+    isAssertion: Boolean(s.is_assertion),
     status: "pending",
   }));
 }
@@ -95,6 +101,7 @@ export default function AgentGeneratePage() {
   const [codeActiveOrder, setCodeActiveOrder] = useState<number | null>(null);
   const [positionLog, setPositionLog] = useState("");
   const [codeLog, setCodeLog] = useState("");
+  const [completionLog, setCompletionLog] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [positionLiveExpanded, setPositionLiveExpanded] = useState(true);
   const [codeLiveExpanded, setCodeLiveExpanded] = useState(true);
@@ -337,12 +344,70 @@ export default function AgentGeneratePage() {
     [advancePathStep, codeSerial, scrollPathStep, updateCodeStep]
   );
 
+  const applyAssertionEvent = useCallback(
+    (name: string, stepOrder: number, detail: Record<string, unknown>, message: string) => {
+      const logText = message || name;
+      setPositionLog(logText);
+      setCodeLog(logText);
+      setPositionActiveOrder(stepOrder);
+      setCodeActiveOrder(stepOrder);
+      setPositionSelectedOrder(stepOrder);
+      setCodeSelectedOrder(stepOrder);
+      scrollPathStep("position", stepOrder);
+      scrollPathStep("code", stepOrder);
+
+      const patch = (s: PathStepLive): PathStepLive => {
+        const next: PathStepLive = { ...s, isAssertion: true, status: "generating" };
+        if (name === "assertion_start") {
+          return next;
+        }
+        const success = name === "assertion_passed";
+        const posImg = detail.position_image ? String(detail.position_image) : s.beforeImage;
+        const verify = detail.verify as Record<string, unknown> | undefined;
+        const reasoning = verify?.reasoning ? String(verify.reasoning) : logText;
+        return {
+          ...next,
+          status: success ? "ready" : "failed",
+          beforeImage: posImg,
+          afterImage: posImg,
+          scriptText: `断言验证 · ${success ? "通过" : "未通过"}\n${reasoning}`,
+        };
+      };
+
+      updatePositionStep(stepOrder, patch);
+      updateCodeStep(stepOrder, (s) => ({
+        ...patch(s),
+        beforeImage: detail.code_image ? String(detail.code_image) : s.beforeImage,
+        afterImage: detail.code_image ? String(detail.code_image) : s.afterImage,
+      }));
+
+      if (name === "assertion_failed") {
+        setError(message || "断言未通过，Case 已终止");
+        setGenerating(false);
+      }
+      if (name === "assertion_passed") {
+        advancePathStep("position", stepOrder);
+        advancePathStep("code", stepOrder);
+      }
+    },
+    [advancePathStep, scrollPathStep, updateCodeStep, updatePositionStep]
+  );
+
   const applyStreamEvent = useCallback(
     (event: Record<string, unknown>) => {
       const name = String(event.event ?? "");
       const stepOrder = event.step_order != null ? Number(event.step_order) : null;
       const detail = (event.detail ?? {}) as Record<string, unknown>;
       const message = String(event.message ?? "");
+
+      if (name === "completion_verify_start" || name === "completion_verify_done") {
+        setCompletionLog(message || name);
+        return;
+      }
+      if (name === "completion_verify_step" || name === "assertion_dual_review") {
+        setCompletionLog(message || name);
+        return;
+      }
 
       if (stepOrder == null) {
         if (name === "started") {
@@ -359,6 +424,15 @@ export default function AgentGeneratePage() {
         return;
       }
 
+      if (
+        name === "assertion_start" ||
+        name === "assertion_passed" ||
+        name === "assertion_failed"
+      ) {
+        applyAssertionEvent(name, stepOrder, detail, message);
+        return;
+      }
+
       if (name.startsWith("position_")) {
         applyPositionEvent(name, stepOrder, detail, message);
         return;
@@ -367,7 +441,7 @@ export default function AgentGeneratePage() {
         applyCodeEvent(name, stepOrder, detail, message);
       }
     },
-    [applyCodeEvent, applyPositionEvent]
+    [applyAssertionEvent, applyCodeEvent, applyPositionEvent]
   );
 
   const canGenerate = Boolean(
@@ -389,6 +463,7 @@ export default function AgentGeneratePage() {
     const descriptions = scripts.steps.map((s) => ({
       step_order: s.step_order,
       description: s.description,
+      is_assertion: s.is_assertion,
     }));
     setPositionSteps(emptyPathSteps(descriptions));
     setCodeSteps(emptyPathSteps(descriptions));
@@ -441,10 +516,10 @@ export default function AgentGeneratePage() {
   const totalSteps = positionSteps.length;
 
   const progressText = generating
-    ? `Pos ${positionDone}/${totalSteps} · Code ${codeDone}/${totalSteps}`
+    ? `Pos ${positionDone}/${totalSteps} · Code ${codeDone}/${totalSteps}${completionLog ? ` · ${completionLog}` : ""}`
     : scripts?.script_status
-      ? `脚本状态 · ${scripts.script_status}`
-      : "";
+      ? `脚本状态 · ${scripts.script_status}${completionLog ? ` · ${completionLog}` : ""}`
+      : completionLog || "";
 
   return (
     <div className="platform-page dual-gen-page">
@@ -623,6 +698,7 @@ function PathColumn({
               <div className="dual-gen-step-meta">
                 <span className={`dual-gen-dot ${step.status}`} />
                 <span>#{step.stepOrder + 1}</span>
+                {step.isAssertion && <span className="dual-gen-assertion-tag">断言</span>}
                 <span>{step.status}</span>
               </div>
               {step.description.slice(0, 36) || "—"}

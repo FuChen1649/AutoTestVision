@@ -189,6 +189,14 @@
   background: #ef4444;
 }
 
+.dual-gen-assertion-tag {
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
 .dual-gen-main {
   display: flex;
   flex-direction: column;

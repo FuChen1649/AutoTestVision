@@ -91,6 +91,7 @@ export interface DualScriptStep {
   step_type: string;
   description: string;
   script_status: string | null;
+  is_assertion?: boolean;
   position_script: Record<string, unknown> | null;
   code_script: Record<string, unknown> | null;
   script_generated_at: string | null;

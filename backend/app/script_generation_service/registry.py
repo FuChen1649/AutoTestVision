@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 class ScriptGenRuntime:
     task_uuid: str
     cancelled: bool = False
+    assertion_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    assertion_results: dict[int, bool] = field(default_factory=dict)
+    assertion_events: dict[int, asyncio.Event] = field(default_factory=dict)
     harness_task: asyncio.Task | None = field(default=None, repr=False)
 
 

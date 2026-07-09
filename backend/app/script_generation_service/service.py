@@ -27,7 +27,15 @@ from app.models.case import Case, CaseStep
 from app.agent_test_service.tools import agent_tools, is_tool_step
 from app.platform_service.task_log import append_platform_task_log
 from app.platform_service.task_service import register_platform_task, sync_task_status
+from app.script_generation_service.assertion_analyzer import assertion_analyzer
+from app.script_generation_service.assertion_detector import is_assertion_step
+from app.script_generation_service.assertion_repository import (
+    assertion_repository,
+    script_gen_progress_repository,
+)
+from app.script_generation_service.completion_verifier import completion_verifier, sample_step_sections
 from app.script_generation_service.registry import ScriptGenRuntime, script_gen_registry
+from app.result_verify_service.dual_repository import dual_verify_repository
 from app.services.adb import adb_service
 
 logger = get_agent_logger()
@@ -60,6 +68,7 @@ class DualScriptStepView(BaseModel):
     step_type: str
     description: str
     script_status: str | None = None
+    is_assertion: bool = False
     position_script: ActionIntent | None = None
     code_script: GeneratedStepCode | None = None
     script_generated_at: datetime | None = None
@@ -308,6 +317,290 @@ class ScriptGenerationService:
             detail={"error": exec_error, "code_line": generated.code_line} if exec_error else {"code_line": generated.code_line},
         )
 
+    async def _sync_case_assertion_definitions(
+        self, db: AsyncSession, case_id: int, steps: list[CaseStep]
+    ) -> None:
+        for step in steps:
+            if is_assertion_step(step.description):
+                await assertion_repository.upsert_definition(
+                    db,
+                    case_id=case_id,
+                    step_order=step.step_order,
+                    description=step.description,
+                )
+        await db.commit()
+
+    async def _run_coordinated_assertion_step(
+        self,
+        *,
+        runtime: ScriptGenRuntime | None,
+        task_uuid: str,
+        case_id: int,
+        pos_run_uuid: str,
+        code_run_uuid: str,
+        step: CaseStep,
+        position_serial: str,
+        code_serial: str,
+        llm_provider: str | None,
+        path: str,
+    ) -> bool:
+        if runtime is None:
+            return True
+
+        is_leader = False
+        async with runtime.assertion_lock:
+            if step.step_order in runtime.assertion_results:
+                return runtime.assertion_results[step.step_order]
+            if step.step_order not in runtime.assertion_events:
+                runtime.assertion_events[step.step_order] = asyncio.Event()
+                is_leader = True
+            event = runtime.assertion_events[step.step_order]
+
+        if not is_leader:
+            await event.wait()
+            return runtime.assertion_results.get(step.step_order, False)
+
+        success = False
+        verify_detail: dict | None = None
+        try:
+            await self._emit(
+                task_uuid,
+                "assertion_start",
+                case_id,
+                step_order=step.step_order,
+                message=f"断言验证：{step.description[:80]}",
+                detail={"description": step.description},
+            )
+
+            pos_image, _, _ = await action_executor.capture_screen(position_serial)
+            code_image, _, _ = await action_executor.capture_screen(code_serial)
+            ui_xml = await dump_ui_xml_async(code_serial)
+
+            verify_result = await assertion_analyzer.verify(
+                step_order=step.step_order,
+                description=step.description,
+                screen_image=code_image,
+                ui_xml=ui_xml,
+                provider=llm_provider,
+            )
+            success = verify_result.success
+            verify_detail = verify_result.model_dump(mode="json")
+
+            async with async_session() as db:
+                await assertion_repository.upsert_definition(
+                    db,
+                    case_id=case_id,
+                    step_order=step.step_order,
+                    description=step.description,
+                )
+                await assertion_repository.save_result(
+                    db,
+                    task_uuid=task_uuid,
+                    case_id=case_id,
+                    step_order=step.step_order,
+                    position_image=pos_image,
+                    code_image=code_image,
+                    ui_xml=ui_xml,
+                    verify_result=verify_result,
+                )
+
+                skip_intent = ActionIntent(
+                    action="skip",
+                    reasoning=f"断言步骤 · {verify_result.reasoning[:200]}",
+                    confidence=verify_result.confidence,
+                )
+                skip_code = GeneratedStepCode(
+                    code_line="d.sleep(0.5)",
+                    reasoning=f"断言步骤 · success={verify_result.success}",
+                    confidence=verify_result.confidence,
+                )
+
+                step_row = await self._get_case_step(db, case_id, step.step_order)
+                step_row.position_script_json = skip_intent.model_dump_json()
+                step_row.code_script_json = skip_code.model_dump_json()
+                step_row.script_status = "failed" if not success else "ready"
+                step_row.script_generated_at = datetime.now(timezone.utc)
+
+                pos_run = await agent_repository.get_run_by_uuid(db, pos_run_uuid)
+                code_run = await agent_code_repository.get_run_by_uuid(db, code_run_uuid)
+                assert pos_run is not None and code_run is not None
+
+                exec_error = None if success else verify_result.reasoning[:400]
+                await self._persist_position_step(
+                    db,
+                    pos_run,
+                    step_order=step.step_order,
+                    before_image=pos_image,
+                    before_annotated=None,
+                    after_image=pos_image,
+                    intent=skip_intent,
+                    exec_error=exec_error,
+                )
+                await self._persist_code_step(
+                    db,
+                    code_run,
+                    step_order=step.step_order,
+                    before_image=code_image,
+                    after_image=code_image,
+                    generated=skip_code,
+                    exec_error=exec_error,
+                    ui_xml=ui_xml,
+                )
+                await agent_repository.update_run_fields(
+                    db, pos_run, current_step_index=step.step_order + 1
+                )
+                await agent_code_repository.update_run_fields(
+                    db, code_run, current_step_index=step.step_order + 1
+                )
+                await db.commit()
+
+            event_name = "assertion_passed" if success else "assertion_failed"
+            await self._emit(
+                task_uuid,
+                event_name,
+                case_id,
+                step_order=step.step_order,
+                message=verify_result.reasoning[:200] or ("断言通过" if success else "断言未通过"),
+                detail={
+                    "success": success,
+                    "position_image": pos_image,
+                    "code_image": code_image,
+                    "verify": verify_detail,
+                },
+            )
+        except Exception as exc:
+            success = False
+            logger.exception("[script_gen] 断言步骤失败 step=%d: %s", step.step_order, exc)
+            await self._emit(
+                task_uuid,
+                "assertion_failed",
+                case_id,
+                step_order=step.step_order,
+                message=str(exc),
+            )
+        finally:
+            runtime.assertion_results[step.step_order] = success
+            event.set()
+            if not success:
+                runtime.cancelled = True
+
+        return success
+
+    async def _run_completion_verification(
+        self,
+        *,
+        task_uuid: str,
+        case_id: int,
+        pos_run_uuid: str,
+        code_run_uuid: str,
+        llm_provider: str | None,
+        total_steps: int,
+    ) -> None:
+        await self._emit(
+            task_uuid,
+            "completion_verify_start",
+            case_id,
+            message="开始执行完成后抽样验证",
+        )
+
+        async with async_session() as db:
+            task = await dual_verify_repository.get_task(db, task_uuid)
+            pos_run = await agent_repository.get_run_by_uuid(db, pos_run_uuid)
+            code_run = await agent_code_repository.get_run_by_uuid(db, code_run_uuid)
+            if not task or not pos_run or not code_run:
+                return
+
+            case = await self._load_case(db, case_id)
+            step_desc = {s.step_order: s.description for s in case.steps}
+
+            sections = sample_step_sections(total_steps, per_section=3)
+            for section_name, orders in sections:
+                for step_order in orders:
+                    pos_step = next((s for s in pos_run.steps if s.step_order == step_order), None)
+                    if not pos_step:
+                        continue
+                    before = pos_step.before_image_annotated or pos_step.before_image
+                    after = pos_step.after_image
+                    if not before or not after:
+                        continue
+
+                    from app.result_verify_service.dual_analyzer import _format_position_action
+
+                    action = _format_position_action(pos_step.intent_json)
+                    try:
+                        review = await completion_verifier.review_annotation(
+                            step_order=step_order,
+                            section=section_name,
+                            description=step_desc.get(step_order, ""),
+                            before_annotated=before,
+                            after_image=after,
+                            action_summary=action,
+                            provider=llm_provider,
+                        )
+                        await script_gen_progress_repository.append_sampled_review(db, task, review)
+                        await self._emit(
+                            task_uuid,
+                            "completion_verify_step",
+                            case_id,
+                            step_order=step_order,
+                            message=(
+                                f"抽样验证 step {step_order + 1} · "
+                                f"标注={'✓' if review.annotation_correct else '✗'} "
+                                f"流程={'✓' if review.flow_correct else '✗'}"
+                            ),
+                            detail={"section": section_name, "review": review.model_dump(mode="json")},
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[script_gen] 抽样验证失败 step=%d: %s", step_order, exc
+                        )
+
+            assertion_defs = await assertion_repository.list_definitions(db, case_id)
+            assertion_results = await assertion_repository.list_results(db, task_uuid)
+            result_by_order = {row.step_order: row for row in assertion_results}
+
+            for definition in assertion_defs:
+                row = result_by_order.get(definition.step_order)
+                if not row or not row.position_image or not row.code_image:
+                    continue
+                try:
+                    dual_review = await completion_verifier.review_assertion_dual(
+                        step_order=definition.step_order,
+                        description=definition.description,
+                        position_image=row.position_image,
+                        code_image=row.code_image,
+                        provider=llm_provider,
+                    )
+                    await script_gen_progress_repository.append_assertion_dual_review(
+                        db, task, dual_review
+                    )
+                    await self._emit(
+                        task_uuid,
+                        "assertion_dual_review",
+                        case_id,
+                        step_order=definition.step_order,
+                        message=(
+                            f"断言双脚一致性 step {definition.step_order + 1} · "
+                            f"{'一致' if dual_review.consistent else '不一致'}"
+                        ),
+                        detail={"review": dual_review.model_dump(mode="json")},
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[script_gen] 断言双脚验证失败 step=%d: %s",
+                        definition.step_order,
+                        exc,
+                    )
+
+            await db.commit()
+
+        await self._emit(
+            task_uuid,
+            "completion_verify_done",
+            case_id,
+            message="完成后抽样验证结束",
+        )
+
     async def _get_case_step(self, db: AsyncSession, case_id: int, step_order: int) -> CaseStep:
         result = await db.execute(
             select(CaseStep).where(CaseStep.case_id == case_id, CaseStep.step_order == step_order)
@@ -335,7 +628,11 @@ class ScriptGenerationService:
         task_uuid: str,
         case_id: int,
         run_uuid: str,
+        pos_run_uuid: str,
+        code_run_uuid: str,
         serial: str,
+        position_serial: str,
+        code_serial: str,
         llm_provider: str | None,
         total: int,
         runtime: ScriptGenRuntime | None,
@@ -352,6 +649,34 @@ class ScriptGenerationService:
                     await sync_task_status(db, task_uuid, status="cancelled", commit=True)
                     await self._emit(task_uuid, "cancelled", case_id, message="Position 路径已取消")
                     return failed
+
+                if is_assertion_step(step.description):
+                    assertion_ok = await self._run_coordinated_assertion_step(
+                        runtime=runtime,
+                        task_uuid=task_uuid,
+                        case_id=case_id,
+                        pos_run_uuid=pos_run_uuid,
+                        code_run_uuid=code_run_uuid,
+                        step=step,
+                        position_serial=position_serial,
+                        code_serial=code_serial,
+                        llm_provider=llm_provider,
+                        path="position",
+                    )
+                    if not assertion_ok:
+                        failed = True
+                        return failed
+                    await sync_task_status(
+                        db,
+                        task_uuid,
+                        progress={
+                            "position_completed_steps": index + 1,
+                            "total_steps": total,
+                            "message": f"Position 断言步骤 {index + 1}/{total} 完成",
+                        },
+                        commit=True,
+                    )
+                    continue
 
                 step_row = await self._get_case_step(db, case_id, step.step_order)
                 step_row.script_status = "generating"
@@ -518,7 +843,11 @@ class ScriptGenerationService:
         task_uuid: str,
         case_id: int,
         run_uuid: str,
+        pos_run_uuid: str,
+        code_run_uuid: str,
         serial: str,
+        position_serial: str,
+        code_serial: str,
         llm_provider: str | None,
         total: int,
         runtime: ScriptGenRuntime | None,
@@ -535,6 +864,34 @@ class ScriptGenerationService:
                     await sync_task_status(db, task_uuid, status="cancelled", commit=True)
                     await self._emit(task_uuid, "cancelled", case_id, message="Code 路径已取消")
                     return failed
+
+                if is_assertion_step(step.description):
+                    assertion_ok = await self._run_coordinated_assertion_step(
+                        runtime=runtime,
+                        task_uuid=task_uuid,
+                        case_id=case_id,
+                        pos_run_uuid=pos_run_uuid,
+                        code_run_uuid=code_run_uuid,
+                        step=step,
+                        position_serial=position_serial,
+                        code_serial=code_serial,
+                        llm_provider=llm_provider,
+                        path="code",
+                    )
+                    if not assertion_ok:
+                        failed = True
+                        return failed
+                    await sync_task_status(
+                        db,
+                        task_uuid,
+                        progress={
+                            "code_completed_steps": index + 1,
+                            "total_steps": total,
+                            "message": f"Code 断言步骤 {index + 1}/{total} 完成",
+                        },
+                        commit=True,
+                    )
+                    continue
 
                 step_row = await self._get_case_step(db, case_id, step.step_order)
                 if step_row.script_status != "failed":
@@ -728,6 +1085,8 @@ class ScriptGenerationService:
 
     async def get_case_scripts(self, db: AsyncSession, case_id: int) -> CaseScriptsResponse:
         case = await self._load_case(db, case_id)
+        assertion_defs = await assertion_repository.list_definitions(db, case_id)
+        assertion_orders = {row.step_order for row in assertion_defs}
         steps: list[DualScriptStepView] = []
         for step in case.steps:
             position = None
@@ -742,6 +1101,8 @@ class ScriptGenerationService:
                     step_type=step.step_type,
                     description=step.description,
                     script_status=step.script_status,
+                    is_assertion=step.step_order in assertion_orders
+                        or is_assertion_step(step.description),
                     position_script=position,
                     code_script=code,
                     script_generated_at=step.script_generated_at,
@@ -884,6 +1245,9 @@ class ScriptGenerationService:
             code_run = await agent_code_repository.get_run_by_uuid(db, code_run.run_uuid)
             assert pos_run is not None and code_run is not None
 
+            await db.commit()
+            await self._sync_case_assertion_definitions(db, case_id, natural_steps)
+
             pos_run_uuid = pos_run.run_uuid
             code_run_uuid = code_run.run_uuid
 
@@ -892,7 +1256,11 @@ class ScriptGenerationService:
                     task_uuid=task_uuid,
                     case_id=case_id,
                     run_uuid=pos_run_uuid,
+                    pos_run_uuid=pos_run_uuid,
+                    code_run_uuid=code_run_uuid,
                     serial=position_serial,
+                    position_serial=position_serial,
+                    code_serial=code_serial,
                     llm_provider=llm_provider,
                     total=total,
                     runtime=runtime,
@@ -901,7 +1269,11 @@ class ScriptGenerationService:
                     task_uuid=task_uuid,
                     case_id=case_id,
                     run_uuid=code_run_uuid,
+                    pos_run_uuid=pos_run_uuid,
+                    code_run_uuid=code_run_uuid,
                     serial=code_serial,
+                    position_serial=position_serial,
+                    code_serial=code_serial,
                     llm_provider=llm_provider,
                     total=total,
                     runtime=runtime,
@@ -913,8 +1285,26 @@ class ScriptGenerationService:
             assert pos_run is not None and code_run is not None
 
             await self._finalize_dual_runs(
-                db, pos_run, code_run, completed_steps=total, failed=generation_failed
+                db,
+                pos_run,
+                code_run,
+                completed_steps=min(pos_run.current_step_index, code_run.current_step_index),
+                failed=generation_failed,
             )
+
+            if not generation_failed:
+                try:
+                    await self._run_completion_verification(
+                        task_uuid=task_uuid,
+                        case_id=case_id,
+                        pos_run_uuid=pos_run_uuid,
+                        code_run_uuid=code_run_uuid,
+                        llm_provider=llm_provider,
+                        total_steps=total,
+                    )
+                except Exception as exc:
+                    logger.warning("[script_gen] 完成后验证异常: %s", exc)
+
             await sync_task_status(
                 db,
                 task_uuid,

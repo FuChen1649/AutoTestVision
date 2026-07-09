@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.script_generation_service.assertion_repository import assertion_repository
 from app.script_generation_service.service import (
     GenerateScriptsRequest,
     GenerateScriptsResponse,
@@ -47,6 +48,22 @@ async def start_generate_scripts(
         return await script_generation_service.start_generation(db, case_id, payload)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/script-generation/{task_uuid}/assertion-results")
+async def get_assertion_results(task_uuid: str, db: AsyncSession = Depends(get_db)):
+    rows = await assertion_repository.list_results(db, task_uuid)
+    return [
+        {
+            "step_order": row.step_order,
+            "success": row.success,
+            "position_image": row.position_image,
+            "code_image": row.code_image,
+            "verify_result": json.loads(row.verify_result_json) if row.verify_result_json else None,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
 
 
 @router.get("/script-generation/{task_uuid}/stream")
