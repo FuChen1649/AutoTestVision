@@ -1,11 +1,94 @@
 .dual-gen-page {
-  padding: 12px 16px;
+  padding: 0;
   font-size: 0.8125rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  background: transparent;
+}
+
+.dual-gen-path-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px 0;
+}
+
+.dual-gen-path-bar .exec-path-switch {
+  min-width: 360px;
+}
+
+.dual-gen-path-bar .exec-path-btn {
+  text-decoration: none;
+}
+
+.dual-gen-path-bar .exec-path-btn.dual.active {
+  border-color: rgba(45, 212, 191, 0.5);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.15);
+}
+
+.dual-gen-hero {
+  flex-shrink: 0;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(20, 28, 44, 0.55) 0%, transparent 100%);
+}
+
+.dual-gen-hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.dual-gen-hero-copy h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.dual-gen-hero-copy p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.dual-gen-progress-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dual-gen-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.dual-gen-pill.pos {
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--pos);
+  background: var(--pos-soft);
+}
+
+.dual-gen-pill.code {
+  border-color: rgba(52, 211, 153, 0.35);
+  color: var(--code);
+  background: var(--code-soft);
 }
 
 .dual-gen-toolbar {
@@ -13,50 +96,39 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #1f2937;
-  flex-shrink: 0;
 }
 
 .dual-gen-toolbar .platform-select,
 .dual-gen-toolbar .platform-btn {
-  padding: 5px 10px;
-  font-size: 0.75rem;
-  border-radius: 6px;
+  padding: 7px 11px;
+  font-size: 0.76rem;
+  border-radius: var(--radius-sm);
 }
 
 .dual-gen-status {
   flex: 1;
   min-width: 180px;
   font-size: 0.72rem;
-  color: #9ca3af;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .dual-gen-status.ok {
-  color: #6ee7b7;
+  color: var(--ok);
 }
 
 .dual-gen-status.warn {
-  color: #fca5a5;
-}
-
-.dual-gen-layout {
-  display: grid;
-  grid-template-columns: 168px 1fr;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+  color: var(--danger);
 }
 
 .dual-gen-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  padding: 12px;
 }
 
 .dual-gen-column {
@@ -64,10 +136,11 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border: 1px solid #1f2937;
-  border-radius: 8px;
-  background: #0b1220;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 .dual-gen-column-head {
@@ -75,16 +148,21 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 2px solid #1f2937;
-  background: #111827;
-  font-size: 0.75rem;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 0.78rem;
   flex-shrink: 0;
 }
 
+.dual-gen-column-head strong {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
 .dual-gen-column-head span {
-  color: #6b7280;
-  font-family: ui-monospace, monospace;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
   font-size: 0.68rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -93,7 +171,7 @@
 
 .dual-gen-column-body {
   display: grid;
-  grid-template-columns: 148px 1fr;
+  grid-template-columns: 152px 1fr;
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -106,25 +184,29 @@
   gap: 8px;
   min-width: 0;
   min-height: 0;
-  padding: 8px;
+  padding: 10px;
   overflow: hidden;
 }
 
 .dual-gen-column .dual-gen-steps {
   border: none;
   border-radius: 0;
-  border-right: 1px solid #1f2937;
+  border-right: 1px solid var(--border);
+  background: rgba(7, 11, 18, 0.35);
 }
 
 .dual-gen-column .dual-gen-panel {
   flex: 1;
   min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-canvas);
 }
 
 .dual-gen-steps {
-  border: 1px solid #1f2937;
-  border-radius: 8px;
-  background: #0f172a;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
   overflow-y: auto;
   min-height: 0;
   height: 100%;
@@ -135,26 +217,28 @@
   width: 100%;
   text-align: left;
   border: none;
-  border-bottom: 1px solid #1f2937;
+  border-bottom: 1px solid var(--border);
   background: transparent;
-  color: #d1d5db;
-  padding: 8px 10px;
+  color: var(--text-secondary);
+  padding: 9px 11px;
   cursor: pointer;
   font-size: 0.72rem;
   line-height: 1.35;
+  transition: background var(--dur);
 }
 
 .dual-gen-step-item:hover {
-  background: rgba(37, 99, 235, 0.08);
+  background: var(--bg-hover);
 }
 
 .dual-gen-step-item.active {
-  background: rgba(37, 99, 235, 0.14);
-  border-left: 2px solid #2563eb;
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+  color: var(--text);
 }
 
 .dual-gen-step-item.running {
-  border-left: 2px solid #f59e0b;
+  border-left: 2px solid var(--warn);
 }
 
 .dual-gen-step-meta {
@@ -162,8 +246,9 @@
   align-items: center;
   gap: 6px;
   margin-bottom: 2px;
-  color: #9ca3af;
-  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
 }
 
 .dual-gen-dot {
@@ -174,62 +259,46 @@
 }
 
 .dual-gen-dot.pending {
-  background: #4b5563;
+  background: var(--text-muted);
 }
 
 .dual-gen-dot.generating {
-  background: #f59e0b;
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn-soft);
 }
 
 .dual-gen-dot.ready {
-  background: #10b981;
+  background: var(--ok);
 }
 
 .dual-gen-dot.failed {
-  background: #ef4444;
+  background: var(--danger);
 }
 
 .dual-gen-assertion-tag {
-  font-size: 0.6rem;
-  padding: 1px 4px;
+  font-size: 0.58rem;
+  padding: 1px 5px;
   border-radius: 3px;
-  background: rgba(245, 158, 11, 0.2);
-  color: #fbbf24;
-}
-
-.dual-gen-main {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-family: var(--font-sans);
 }
 
 .dual-gen-nl {
-  padding: 6px 10px;
-  border: 1px solid #1f2937;
-  border-radius: 6px;
-  background: #111827;
-  color: #e5e7eb;
-  font-size: 0.75rem;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 0.76rem;
   line-height: 1.4;
   flex-shrink: 0;
 }
 
-.dual-gen-panels {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
-  align-items: stretch;
-}
-
 .dual-gen-panel {
-  border: 1px solid #1f2937;
-  border-radius: 8px;
-  background: #0f172a;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -237,33 +306,6 @@
   overflow: hidden;
 }
 
-.dual-gen-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid #1f2937;
-  background: #111827;
-  font-size: 0.72rem;
-  flex-shrink: 0;
-}
-
-.dual-gen-panel-head strong {
-  color: #f3f4f6;
-  font-weight: 600;
-}
-
-.dual-gen-panel-head span {
-  color: #6b7280;
-  font-family: ui-monospace, monospace;
-  font-size: 0.68rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 步骤记录区：可滚动，不遮挡下方实时画面 */
 .dual-gen-record {
   flex: 1;
   min-height: 0;
@@ -275,86 +317,86 @@
 .dual-gen-shots {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 8px;
+  gap: 8px;
+  padding: 10px;
   flex-shrink: 0;
-}
-
-.dual-gen-shot {
-  min-width: 0;
 }
 
 .dual-gen-shot label {
   display: block;
-  font-size: 0.65rem;
-  color: #6b7280;
+  font-size: 0.62rem;
+  color: var(--text-muted);
   margin-bottom: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .dual-gen-shot img {
   width: 100%;
   height: auto;
-  max-height: 160px;
+  max-height: 168px;
   object-fit: contain;
-  border-radius: 4px;
-  border: 1px solid #374151;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
   background: #030712;
 }
 
 .dual-gen-panel.live-collapsed .dual-gen-shot img {
-  max-height: 200px;
+  max-height: 210px;
 }
 
 .dual-gen-shot-empty {
   aspect-ratio: 9 / 16;
-  max-height: 160px;
-  border-radius: 4px;
-  border: 1px dashed #374151;
+  max-height: 168px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
   background: #030712;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #4b5563;
+  color: var(--text-muted);
   font-size: 0.68rem;
 }
 
 .dual-gen-panel.live-collapsed .dual-gen-shot-empty {
-  max-height: 200px;
+  max-height: 210px;
 }
 
 .dual-gen-script {
-  border-top: 1px solid #1f2937;
-  padding: 6px 10px 8px;
-  background: #0b1220;
+  border-top: 1px solid var(--border);
+  padding: 8px 11px 10px;
+  background: rgba(7, 11, 18, 0.45);
   flex-shrink: 0;
 }
 
 .dual-gen-script label {
   display: block;
-  font-size: 0.65rem;
-  color: #6b7280;
+  font-size: 0.62rem;
+  color: var(--text-muted);
   margin-bottom: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .dual-gen-script pre {
   margin: 0;
   font-size: 0.68rem;
   line-height: 1.45;
-  color: #cbd5e1;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 64px;
+  max-height: 72px;
   overflow: auto;
 }
 
 .dual-gen-panel.live-collapsed .dual-gen-script pre {
-  max-height: 120px;
+  max-height: 128px;
 }
 
-/* 实时画面：固定在栏位底部 */
 .dual-gen-live-wrap {
   flex-shrink: 0;
-  border-top: 1px solid #1f2937;
+  border-top: 1px solid var(--border);
   background: #030712;
 }
 
@@ -364,68 +406,29 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 5px 10px;
+  padding: 6px 11px;
   border: none;
-  background: #111827;
-  color: #9ca3af;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
   font-size: 0.68rem;
   cursor: pointer;
 }
 
 .dual-gen-live-toggle:hover {
-  color: #e5e7eb;
-  background: #1f2937;
-}
-
-.dual-gen-live-viewport {
-  position: relative;
-  width: 100%;
-  min-height: 140px;
-  max-height: 240px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #000;
-}
-
-.dual-gen-live-img {
-  width: 100%;
-  height: 100%;
-  max-height: 240px;
-  object-fit: contain;
-}
-
-.dual-gen-live-empty {
-  color: #4b5563;
-  font-size: 0.68rem;
-  padding: 24px;
-}
-
-.dual-gen-live-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  font-size: 0.6rem;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #6b7280;
-}
-
-.dual-gen-live-badge.on {
-  color: #6ee7b7;
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .dual-gen-log {
-  border: 1px solid #1f2937;
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
-  background: #111827;
+  background: var(--bg-elevated);
   font-size: 0.68rem;
-  color: #9ca3af;
+  color: var(--text-muted);
   max-height: 40px;
   overflow: auto;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
@@ -442,21 +445,6 @@
   .dual-gen-column .dual-gen-steps {
     max-height: 140px;
     border-right: none;
-    border-bottom: 1px solid #1f2937;
-  }
-}
-
-@media (max-width: 960px) {
-  .dual-gen-layout {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-  }
-
-  .dual-gen-panels {
-    grid-template-columns: 1fr;
-  }
-
-  .dual-gen-steps {
-    max-height: 160px;
+    border-bottom: 1px solid var(--border);
   }
 }

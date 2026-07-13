@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { tasksApi, type PlatformTask } from "../api/platform";
 import { isApiOfflineError } from "../api/http";
-import "./PlatformPages.css";
+import OpsPageShell, { ModeChip, ProgressBar } from "../components/OpsPageShell";
+import "../pages/PlatformPages.css";
 
 function statusBadge(status: string) {
   const cls =
@@ -13,7 +14,19 @@ function statusBadge(status: string) {
         : status === "running"
           ? "platform-badge-running"
           : "platform-badge-pending";
-  return <span className={`platform-badge ${cls}`}>{status}</span>;
+  const label =
+    status === "completed"
+      ? "已完成"
+      : status === "failed"
+        ? "失败"
+        : status === "running"
+          ? "执行中"
+          : status === "cancelled"
+            ? "已取消"
+            : status === "pending"
+              ? "排队中"
+              : status;
+  return <span className={`platform-badge ${cls}`}>{label}</span>;
 }
 
 function taskTypeLabel(type: string) {
@@ -24,6 +37,22 @@ function taskTypeLabel(type: string) {
     verify: "结果验证",
   };
   return map[type] ?? type;
+}
+
+function taskTone(status: string) {
+  if (status === "running") return "running";
+  if (status === "failed") return "failed";
+  return "";
+}
+
+function formatTime(value: string) {
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 export default function TaskCenterPage() {
@@ -70,11 +99,31 @@ export default function TaskCenterPage() {
     }
   };
 
+  const stats = useMemo(() => {
+    const running = items.filter((t) => t.status === "running" || t.status === "pending").length;
+    const completed = items.filter((t) => t.status === "completed").length;
+    const failed = items.filter((t) => t.status === "failed").length;
+    return { running, completed, failed, total };
+  }, [items, total]);
+
   return (
-    <div className="platform-page">
-      <div className="platform-page-header">
-        <h2>任务中心</h2>
-        <div className="platform-toolbar">
+    <OpsPageShell
+      kicker="Ops · Task Monitor"
+      title="任务中心"
+      lead="统一查看脚本生成、单次执行与跑批任务。每 5 秒自动刷新，可跳转详情、日志或取消进行中的任务。"
+      stats={[
+        { label: "任务总数", value: stats.total },
+        { label: "进行中", value: stats.running, tone: "info" },
+        { label: "已完成", value: stats.completed, tone: "ok" },
+        { label: "失败", value: stats.failed, tone: "danger" },
+      ]}
+      actions={
+        <button className="platform-btn" type="button" onClick={() => void load()} disabled={loading}>
+          {loading ? "刷新中…" : "立即刷新"}
+        </button>
+      }
+      filters={
+        <>
           <select
             className="platform-select"
             value={typeFilter}
@@ -96,79 +145,92 @@ export default function TaskCenterPage() {
             <option value="failed">失败</option>
             <option value="cancelled">已取消</option>
           </select>
-          <button className="platform-btn" type="button" onClick={() => void load()}>
-            刷新
-          </button>
-        </div>
-      </div>
-
+          <Link className="platform-btn" to="/batch">
+            去跑批
+          </Link>
+          <Link className="platform-btn" to="/reports">
+            报告中心
+          </Link>
+        </>
+      }
+    >
       {error && <div className="platform-error">{error}</div>}
 
-      <div className="platform-table-wrap">
-        <table className="platform-table">
-          <thead>
-            <tr>
-              <th>类型</th>
-              <th>Case</th>
-              <th>模式</th>
-              <th>状态</th>
-              <th>进度</th>
-              <th>创建时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((task) => (
-              <tr key={task.task_uuid}>
-                <td>{taskTypeLabel(task.task_type)}</td>
-                <td>
-                  {task.source_case_id ? (
-                    <Link className="platform-link-btn" to={`/cases/${task.source_case_id}/edit`}>
-                      {task.case_name ?? `#${task.source_case_id}`}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td>{task.exec_mode ?? "—"}</td>
-                <td>{statusBadge(task.status)}</td>
-                <td>
-                  {task.progress.completed_steps}/{task.progress.total_steps}
-                  {task.progress.message ? ` · ${task.progress.message}` : ""}
-                </td>
-                <td>{new Date(task.created_at).toLocaleString()}</td>
-                <td>
-                  <div className="platform-actions">
-                    {task.detail_path && (
-                      <Link className="platform-link-btn" to={task.detail_path}>
-                        详情
-                      </Link>
-                    )}
-                    {["running", "pending"].includes(task.status) && (
-                      <button className="platform-link-btn" type="button" onClick={() => void handleCancel(task)}>
-                        取消
-                      </button>
-                    )}
-                    {task.ref_uuid && (
-                      <Link className="platform-link-btn" to={`/logs?run_uuid=${task.ref_uuid}`}>
-                        日志
-                      </Link>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {!loading && items.length === 0 && (
-              <tr>
-                <td colSpan={7}>
-                  <div className="platform-empty">暂无任务</div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="ops-card-list">
+        {items.map((task) => (
+          <article key={task.task_uuid} className={`ops-task-card ${taskTone(task.status)}`}>
+            <div className="ops-task-main">
+              <div className="ops-task-top">
+                <h3 className="ops-task-title">{taskTypeLabel(task.task_type)}</h3>
+                {statusBadge(task.status)}
+                <ModeChip mode={task.exec_mode} />
+              </div>
+              <div className="ops-task-meta">
+                {task.task_uuid.slice(0, 8)}… · {formatTime(task.created_at)}
+                {task.serial ? ` · ${task.serial}` : ""}
+              </div>
+              <div className="ops-task-meta" style={{ marginTop: 6 }}>
+                Case：
+                {task.source_case_id ? (
+                  <Link className="platform-link-btn" to={`/cases/${task.source_case_id}/edit`}>
+                    {task.case_name ?? `#${task.source_case_id}`}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </div>
+              {task.progress.message && <div className="ops-task-msg">{task.progress.message}</div>}
+              {task.error && (
+                <div className="ops-task-msg" style={{ color: "var(--danger)" }}>
+                  {task.error}
+                </div>
+              )}
+            </div>
+            <div className="ops-task-side">
+              <ProgressBar
+                completed={task.progress.completed_steps}
+                total={task.progress.total_steps}
+                tone={
+                  task.status === "failed"
+                    ? "danger"
+                    : task.exec_mode === "code"
+                      ? "code"
+                      : task.exec_mode === "position"
+                        ? "pos"
+                        : "accent"
+                }
+              />
+              <div className="ops-task-actions">
+                {task.detail_path && (
+                  <Link className="platform-btn" to={task.detail_path}>
+                    详情
+                  </Link>
+                )}
+                {task.ref_uuid && (
+                  <Link className="platform-btn" to={`/logs?run_uuid=${task.ref_uuid}`}>
+                    日志
+                  </Link>
+                )}
+                {["running", "pending"].includes(task.status) && (
+                  <button
+                    className="platform-link-btn danger"
+                    type="button"
+                    onClick={() => void handleCancel(task)}
+                  >
+                    取消
+                  </button>
+                )}
+              </div>
+            </div>
+          </article>
+        ))}
+        {!loading && items.length === 0 && (
+          <div className="platform-empty">
+            <div className="platform-empty-title">暂无任务</div>
+            <p>从双脚本生成、执行工作台或跑批启动后，任务会出现在这里。</p>
+          </div>
+        )}
       </div>
-      <div className="platform-pagination">共 {total} 条任务</div>
-    </div>
+    </OpsPageShell>
   );
 }

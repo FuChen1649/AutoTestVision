@@ -399,7 +399,10 @@ export default function AgentTestPage({ bootstrap, onBootstrapConsumed, initialC
     <section className="agent-test-page">
       <header className="agent-test-toolbar">
         <div className="agent-test-toolbar-left">
-          <span className="agent-test-toolbar-title">AgentTest_Position</span>
+          <span className="agent-test-toolbar-title">
+            <span className="agent-path-dot pos" />
+            Position 执行
+          </span>
           {batchRunning && batch && (
             <span className="agent-test-run-badge">
               批量执行 · {batch.completed_cases}/{batch.total_cases} · {batch.status}

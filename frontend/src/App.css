@@ -398,24 +398,35 @@
 
 .primary-btn {
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius, 8px);
+  background: linear-gradient(135deg, var(--accent, #2dd4bf) 0%, var(--accent-dim, #14b8a6) 100%);
+  color: var(--text-inverse, #061018);
   padding: 8px 14px;
-  background: #2563eb;
-  color: #fff;
-  white-space: nowrap;
+  font-weight: 600;
+  box-shadow: 0 4px 14px var(--accent-glow, rgba(45, 212, 191, 0.22));
+}
+
+.primary-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
 }
 
 .primary-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .secondary-btn {
-  border: 1px solid #374151;
-  border-radius: 8px;
+  border: 1px solid var(--border-strong, #2a3a52);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-elevated, #141c2c);
+  color: var(--text, #e8eef7);
   padding: 8px 14px;
-  background: #111827;
-  color: #d1d5db;
+}
+
+.secondary-btn:hover:not(:disabled) {
+  border-color: var(--accent-dim, #14b8a6);
+  background: var(--accent-soft, rgba(45, 212, 191, 0.1));
+  color: var(--accent, #2dd4bf);
 }
 
 .secondary-btn:disabled {

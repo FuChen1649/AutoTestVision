@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { agentApi } from "../api/agent";
 import { agentCodeApi } from "../api/agentCode";
@@ -67,12 +67,13 @@ export default function ResultPage() {
   const [reportItems, setReportItems] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedReportKey, setExpandedReportKey] = useState<string | null>(null);
+  const [selectedReportKey, setSelectedReportKey] = useState<string | null>(null);
   const [reportDetails, setReportDetails] = useState<Record<string, ReportDetail>>({});
-  const [expandedResultKey, setExpandedResultKey] = useState<string | null>(null);
+  const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
   const [runDetails, setRunDetails] = useState<Record<string, RunDetailEntry>>({});
   const [loadingReportId, setLoadingReportId] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
+  const autoSelectedRef = useRef(false);
   const [verifyingBatchId, setVerifyingBatchId] = useState<string | null>(null);
   const [verifyingRunId, setVerifyingRunId] = useState<string | null>(null);
   const [verifyingStepOrder, setVerifyingStepOrder] = useState<number | null>(null);
@@ -101,6 +102,14 @@ export default function ResultPage() {
 
   const verifying =
     verifyingBatchId !== null || verifyingRunId !== null || verifyingDualTaskId !== null;
+
+  const reportStats = useMemo(() => {
+    const dual = reportItems.filter((i) => i.report_type === "dual").length;
+    const batch = reportItems.filter((i) => i.report_type === "batch").length;
+    const failed = reportItems.filter((i) => i.status === "failed").length;
+    const ok = reportItems.filter((i) => i.status === "completed" || i.status === "success").length;
+    return { total: reportItems.length, dual, batch, failed, ok };
+  }, [reportItems]);
 
   const loadReports = useCallback(async () => {
     setLoading(true);
@@ -137,25 +146,21 @@ export default function ResultPage() {
     return run;
   }, []);
 
-  const openRun = useCallback(
-    async (reportId: string, execModeValue: "position" | "code", runId: string, parentKey?: string) => {
-      const resultKey = parentKey ? `${parentKey}:${runId}` : `${reportKey({ report_id: reportId, exec_mode: execModeValue } as ReportSummary)}:${runId}`;
-      if (expandedResultKey === resultKey) {
-        setExpandedResultKey(null);
-        return;
-      }
-      setExpandedResultKey(resultKey);
-      if (runDetails[runId]) return;
+  const loadRun = useCallback(
+    async (execModeValue: "position" | "code", runId: string) => {
+      setFocusedRunId(runId);
+      if (runDetails[runId]) return runDetails[runId].run;
       setLoadingRunId(runId);
       try {
-        await refreshRun(runId, execModeValue);
+        return await refreshRun(runId, execModeValue);
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载执行详情失败");
+        return null;
       } finally {
         setLoadingRunId(null);
       }
     },
-    [expandedResultKey, refreshRun, runDetails]
+    [refreshRun, runDetails]
   );
 
   const ensureReportDetail = useCallback(
@@ -186,47 +191,60 @@ export default function ResultPage() {
     [reportDetails]
   );
 
-  const toggleReport = useCallback(
+  const selectReport = useCallback(
     async (item: ReportSummary) => {
       const key = reportKey(item);
-      if (expandedReportKey === key) {
-        setExpandedReportKey(null);
-        setExpandedResultKey(null);
-        return;
-      }
-      setExpandedReportKey(key);
-      setExpandedResultKey(null);
+      setSelectedReportKey(key);
+      setFocusedRunId(null);
 
       if (item.report_type === "single" && item.run_uuid) {
-        await openRun(item.report_id, item.exec_mode as "position" | "code", item.run_uuid, key);
+        await loadRun(item.exec_mode as "position" | "code", item.run_uuid);
         return;
       }
-      await ensureReportDetail(item);
+
+      const detail = await ensureReportDetail(item);
+      if (!detail) return;
+
+      // 默认加载第一条可展示的 run，右侧立刻有内容
+      const first = detail.case_results[0];
+      if (first?.run_uuid) {
+        const mode =
+          first.exec_mode === "code" || item.exec_mode === "code" ? "code" : "position";
+        await loadRun(mode, first.run_uuid);
+      }
     },
-    [ensureReportDetail, expandedReportKey, openRun]
+    [ensureReportDetail, loadRun]
   );
 
+  // 筛选变化时允许重新自动选中
   useEffect(() => {
+    autoSelectedRef.current = false;
+    setSelectedReportKey(null);
+    setFocusedRunId(null);
+  }, [execMode]);
+
+  // 列表加载后自动选中第一条（或 URL 指定项）
+  useEffect(() => {
+    if (reportItems.length === 0) return;
     const batchId = searchParams.get("batchId");
     const runId = searchParams.get("runId");
     const taskId = searchParams.get("taskId");
     const mode = searchParams.get("mode") as "position" | "code" | "dual" | null;
-    if (!batchId && !runId && !taskId) return;
-    if (reportItems.length === 0) return;
 
     void (async () => {
       if (taskId) {
         const item = reportItems.find((r) => r.report_id === taskId && r.report_type === "dual");
         if (item) {
-          await toggleReport(item);
+          await selectReport(item);
+          autoSelectedRef.current = true;
         }
         return;
       }
-
       if (runId) {
         const item = reportItems.find((r) => r.run_uuid === runId || r.report_id === runId);
         if (item) {
-          await toggleReport(item);
+          await selectReport(item);
+          autoSelectedRef.current = true;
         } else if (mode === "code" || mode === "position") {
           const synthetic: ReportSummary = {
             report_id: runId,
@@ -244,17 +262,27 @@ export default function ResultPage() {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           };
-          setExpandedReportKey(reportKey(synthetic));
-          await openRun(runId, mode, runId);
+          setSelectedReportKey(reportKey(synthetic));
+          await loadRun(mode, runId);
+          autoSelectedRef.current = true;
         }
         return;
       }
       if (batchId) {
         const item = reportItems.find((r) => r.report_id === batchId && r.report_type === "batch");
-        if (item) await toggleReport(item);
+        if (item) {
+          await selectReport(item);
+          autoSelectedRef.current = true;
+        }
+        return;
+      }
+      if (!autoSelectedRef.current) {
+        await selectReport(reportItems[0]);
+        autoSelectedRef.current = true;
       }
     })();
-  }, [searchParams, reportItems, toggleReport, openRun]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在列表/URL 变化时自动选中
+  }, [searchParams, reportItems]);
 
   const applyVerifyStreamEvent = (event: VerifyStreamEvent) => {
     const mode = event.exec_mode ?? "position";
@@ -373,7 +401,6 @@ export default function ResultPage() {
   const renderCaseResult = (
     item: ReportCaseResult,
     execModeValue: "position" | "code",
-    parentKey: string,
     options?: { caseOrder?: number; showVerify?: boolean; pathLabel?: string }
   ) => {
     const runId = item.run_uuid;
@@ -381,8 +408,7 @@ export default function ResultPage() {
     const displayName = options?.pathLabel
       ? `${options.pathLabel} · ${item.case_name}`
       : item.case_name;
-    const resultKey = `${parentKey}:${runId}`;
-    const resultExpanded = expandedResultKey === resultKey;
+    const focused = focusedRunId === runId;
     const entry = runDetails[runId];
     const run = entry?.run;
     const isCurrentRunVerifying = verifyingRunId === runId;
@@ -390,14 +416,14 @@ export default function ResultPage() {
       !isCurrentRunVerifying && Boolean(run?.steps.some((step) => step.purpose_review));
 
     return (
-      <div key={resultKey} className={resultExpanded ? "result-item result-item-open" : "result-item"}>
+      <div key={runId} className={focused ? "result-item result-item-open" : "result-item"}>
         <div className="result-item-header-row">
           <button
             type="button"
             className="result-item-header"
-            onClick={() => void openRun(item.run_uuid, modeValue, runId, parentKey)}
+            onClick={() => void loadRun(modeValue, runId)}
           >
-            <span className="result-batch-chevron">{resultExpanded ? "▾" : "▸"}</span>
+            <span className="result-batch-chevron">{focused ? "●" : "○"}</span>
             <div className="result-item-summary">
               <strong>
                 {options?.caseOrder != null ? `${options.caseOrder + 1}. ` : ""}
@@ -430,7 +456,7 @@ export default function ResultPage() {
           </Link>
         </div>
 
-        {resultExpanded && (
+        {focused && (
           <div className="result-item-body">
             {loadingRunId === runId && !run && <div className="result-empty">加载截图与回放数据...</div>}
             {run && (
@@ -452,16 +478,46 @@ export default function ResultPage() {
     );
   };
 
+  const selectedItem = reportItems.find((item) => reportKey(item) === selectedReportKey) ?? null;
+  const selectedDetail = selectedItem ? reportDetails[reportKey(selectedItem)] : null;
+  const selectedIsBatch = selectedItem?.report_type === "batch";
+  const selectedIsDual = selectedItem?.report_type === "dual";
+  const selectedIsSingle = selectedItem?.report_type === "single";
+  const selectedMode = (selectedItem?.exec_mode ?? "position") as "position" | "code" | "dual";
+  const dualReviews = selectedItem ? dualVerifyReviews[selectedItem.report_id] ?? [] : [];
+  const dualVerifying = selectedItem ? verifyingDualTaskId === selectedItem.report_id : false;
+  const dualVerifyDone = !dualVerifying && dualReviews.length > 0 && selectedIsDual;
+  const batchVerifying = selectedItem ? verifyingBatchId === selectedItem.report_id : false;
+
   return (
     <section className="result-page">
       <header className="result-toolbar">
-        <div>
+        <div className="result-toolbar-copy">
+          <div className="case-hub-kicker">Stage 04 · Report</div>
           <h2>报告中心</h2>
-          <p>跑批与单 Case 报告含回放；双脚本报告可逐步比对 Position / Code 截图一致性</p>
+          <p>左侧选报告，右侧直接看步骤回放与验证细节——无需层层展开。</p>
         </div>
         <div className="result-toolbar-actions">
+          <div className="result-mode-pills" role="tablist">
+            {([
+              { id: "all", label: "全部" },
+              { id: "dual", label: "双脚本" },
+              { id: "position", label: "Position" },
+              { id: "code", label: "Code" },
+            ] as const).map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                role="tab"
+                className={`result-mode-pill ${execMode === mode.id ? "active" : ""} ${mode.id}`}
+                onClick={() => setExecMode(mode.id)}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
           <label className="result-provider">
-            <span>模型</span>
+            <span>验证模型</span>
             <select
               value={selectedProvider}
               onChange={(event) => setSelectedProvider(event.target.value)}
@@ -484,158 +540,186 @@ export default function ResultPage() {
               ↻
             </button>
           </label>
-          <button className="secondary-btn" type="button" onClick={() => void loadReports()} disabled={loading}>
-            {loading ? "刷新中..." : "刷新"}
+          <button className="platform-btn" type="button" onClick={() => void loadReports()} disabled={loading}>
+            {loading ? "刷新中…" : "刷新"}
           </button>
         </div>
       </header>
 
-      <div className="platform-tabs" style={{ padding: "0 0 12px" }}>
-        {(["all", "dual", "position", "code"] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={execMode === mode ? "platform-tab active" : "platform-tab"}
-            onClick={() => setExecMode(mode)}
-          >
-            {mode === "all"
-              ? "全部"
-              : mode === "dual"
-                ? "双脚本"
-                : mode === "position"
-                  ? "Position"
-                  : "Code"}
-          </button>
-        ))}
-      </div>
-
       {error && <div className="result-error">{error}</div>}
 
-      <div className="result-list">
-        {loading && reportItems.length === 0 && <div className="result-empty">加载中...</div>}
-        {!loading && reportItems.length === 0 && <div className="result-empty">暂无执行报告</div>}
-
-        {reportItems.map((item) => {
-          const key = reportKey(item);
-          const expanded = expandedReportKey === key;
-          const detail = reportDetails[key];
-          const batchVerifying = verifyingBatchId === item.report_id;
-          const dualVerifying = verifyingDualTaskId === item.report_id;
-          const dualReviews = dualVerifyReviews[item.report_id] ?? [];
-          const dualVerifyDone =
-            !dualVerifying && dualReviews.length > 0 && item.report_type === "dual";
-          const isBatch = item.report_type === "batch";
-          const isDual = item.report_type === "dual";
-          const mode = item.exec_mode as "position" | "code" | "dual";
-
-          return (
-            <article key={key} className={expanded ? "result-batch result-batch-open" : "result-batch"}>
-              <div className="result-batch-header-row">
-                <button type="button" className="result-batch-header" onClick={() => void toggleReport(item)}>
-                  <span className="result-batch-chevron">{expanded ? "▾" : "▸"}</span>
-                  <div className="result-batch-summary">
-                    <strong>{reportTitle(item)}</strong>
-                    <span>
-                      {formatDateTime(item.created_at)} ·{" "}
-                      {isBatch
-                        ? `${item.total_cases} Case · 通过 ${item.passed_cases} / 失败 ${item.failed_cases}`
-                        : isDual
-                          ? `Case #${item.case_id} · Position + Code 双路径`
-                          : `Case #${item.case_id} · ${item.serial ?? "—"}`}
+      <div className="result-split">
+        <aside className="result-sidebar">
+          <div className="result-sidebar-head">
+            <strong>报告列表</strong>
+            <span>{reportStats.total} 条</span>
+          </div>
+          <div className="result-sidebar-list">
+            {loading && reportItems.length === 0 && <div className="result-empty">加载中...</div>}
+            {!loading && reportItems.length === 0 && (
+              <div className="result-empty">暂无报告</div>
+            )}
+            {reportItems.map((item) => {
+              const key = reportKey(item);
+              const active = selectedReportKey === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`result-side-item ${active ? "active" : ""}`}
+                  onClick={() => void selectReport(item)}
+                >
+                  <div className="result-side-item-top">
+                    <span className={`result-status ${statusClass(item.status)}`}>
+                      {statusLabel(item.status)}
+                    </span>
+                    <span className="result-side-type">
+                      {item.report_type === "dual"
+                        ? "Dual"
+                        : item.report_type === "batch"
+                          ? "Batch"
+                          : item.exec_mode}
                     </span>
                   </div>
-                  <span className={`result-status ${statusClass(item.status)}`}>{statusLabel(item.status)}</span>
+                  <strong>{reportTitle(item)}</strong>
+                  <span className="result-side-meta">
+                    {formatDateTime(item.created_at)}
+                    {item.report_type === "batch"
+                      ? ` · ${item.passed_cases}/${item.total_cases} 通过`
+                      : item.serial
+                        ? ` · ${item.serial.slice(-8)}`
+                        : ""}
+                  </span>
                 </button>
-                {isDual && (
-                  <button
-                    type="button"
-                    className="result-verify-btn"
-                    disabled={
-                      dualVerifying ||
-                      (item.status !== "completed" && item.status !== "success") ||
-                      !selectedProvider ||
-                      verifyingBatchId !== null ||
-                      verifyingRunId !== null
-                    }
-                    onClick={() => void handleVerifyDual(item.report_id)}
-                    title="逐步比对 Position 与 Code 同步骤截图是否一致"
-                  >
-                    {dualVerifying ? "验证中..." : dualVerifyDone ? "已验证" : "双脚本验证"}
-                  </button>
-                )}
-                {isBatch && (mode === "position" || mode === "code") && (
-                  <button
-                    type="button"
-                    className="result-verify-btn"
-                    disabled={batchVerifying || item.completed_cases === 0 || !selectedProvider}
-                    onClick={() => void handleVerifyBatch(item.report_id, mode)}
-                    title="分析本批次所有 Case 各步执行目的"
-                  >
-                    {batchVerifying ? "验证中..." : "验证"}
-                  </button>
-                )}
-                {item.run_uuid && (
-                  <Link className="result-verify-btn" to={logsHref(item.run_uuid, mode)} title="查看执行日志">
-                    日志
+              );
+            })}
+          </div>
+        </aside>
+
+        <main className="result-detail">
+          {!selectedItem && (
+            <div className="result-empty">
+              <div className="platform-empty-title">选择左侧报告</div>
+              <p>选中后右侧会直接展示步骤截图、回放与验证结果。</p>
+            </div>
+          )}
+
+          {selectedItem && (
+            <>
+              <div className="result-detail-head">
+                <div>
+                  <div className="result-detail-kicker">
+                    {selectedIsDual ? "Dual Report" : selectedIsBatch ? "Batch Report" : "Single Run"}
+                  </div>
+                  <h3>{reportTitle(selectedItem)}</h3>
+                  <p>
+                    {formatDateTime(selectedItem.created_at)} · status {statusLabel(selectedItem.status)}
+                    {selectedItem.serial ? ` · ${selectedItem.serial}` : ""}
+                    {selectedItem.run_uuid ? ` · run ${selectedItem.run_uuid.slice(0, 8)}…` : ""}
+                  </p>
+                </div>
+                <div className="result-detail-actions">
+                  {selectedIsDual && (
+                    <button
+                      type="button"
+                      className="result-verify-btn"
+                      disabled={
+                        dualVerifying ||
+                        (selectedItem.status !== "completed" && selectedItem.status !== "success") ||
+                        !selectedProvider ||
+                        verifyingBatchId !== null ||
+                        verifyingRunId !== null
+                      }
+                      onClick={() => void handleVerifyDual(selectedItem.report_id)}
+                    >
+                      {dualVerifying ? "验证中..." : dualVerifyDone ? "已验证" : "双脚本验证"}
+                    </button>
+                  )}
+                  {selectedIsBatch && (selectedMode === "position" || selectedMode === "code") && (
+                    <button
+                      type="button"
+                      className="result-verify-btn"
+                      disabled={batchVerifying || selectedItem.completed_cases === 0 || !selectedProvider}
+                      onClick={() => void handleVerifyBatch(selectedItem.report_id, selectedMode)}
+                    >
+                      {batchVerifying ? "验证中..." : "批量验证"}
+                    </button>
+                  )}
+                  {selectedItem.run_uuid && (
+                    <Link
+                      className="result-verify-btn"
+                      to={logsHref(selectedItem.run_uuid, selectedMode)}
+                    >
+                      日志
+                    </Link>
+                  )}
+                  <Link className="platform-btn" to="/tasks">
+                    任务
                   </Link>
-                )}
+                </div>
               </div>
 
-              {expanded && (
-                <div className="result-batch-body">
-                  {loadingReportId === item.report_id && !detail && item.report_type === "batch" && (
-                    <div className="result-empty">加载报告详情...</div>
+              <div className="result-detail-body">
+                {loadingReportId === selectedItem.report_id && !selectedDetail && selectedItem.report_type !== "single" && (
+                  <div className="result-empty">加载报告详情...</div>
+                )}
+
+                {selectedIsDual && (
+                  <DualScriptVerifyPanel
+                    reviews={dualReviews}
+                    verifyingStepOrder={dualVerifying ? verifyingDualStepOrder : null}
+                    active={dualVerifying || dualReviews.length > 0}
+                  />
+                )}
+
+                {selectedIsBatch &&
+                  selectedDetail?.case_results.map((caseItem, index) =>
+                    renderCaseResult(caseItem, selectedMode === "dual" ? "position" : (selectedMode as "position" | "code"), {
+                      caseOrder: index,
+                      showVerify: true,
+                    })
                   )}
-                  {isBatch &&
-                    detail?.case_results.map((caseItem, index) =>
-                      renderCaseResult(caseItem, mode === "dual" ? "position" : mode, key, {
-                        caseOrder: index,
-                        showVerify: true,
-                      })
-                    )}
-                  {isDual && (
-                    <DualScriptVerifyPanel
-                      reviews={dualReviews}
-                      verifyingStepOrder={dualVerifying ? verifyingDualStepOrder : null}
-                      active={dualVerifying || dualReviews.length > 0}
-                    />
-                  )}
-                  {isDual &&
-                    detail?.case_results.map((caseItem, index) =>
-                      renderCaseResult(caseItem, (caseItem.exec_mode === "code" ? "code" : "position"), key, {
+
+                {selectedIsDual &&
+                  selectedDetail?.case_results.map((caseItem, index) =>
+                    renderCaseResult(
+                      caseItem,
+                      caseItem.exec_mode === "code" ? "code" : "position",
+                      {
                         caseOrder: index,
                         showVerify: false,
                         pathLabel: caseItem.path_label ?? (caseItem.exec_mode === "code" ? "Code" : "Position"),
-                      })
-                    )}
-                  {item.report_type === "single" && item.run_uuid && (
-                    <>
-                      {loadingRunId === item.run_uuid && !runDetails[item.run_uuid] && (
-                        <div className="result-empty">加载截图与回放数据...</div>
-                      )}
-                      {runDetails[item.run_uuid] &&
-                        renderCaseResult(
-                          {
-                            case_id: item.case_id ?? 0,
-                            case_name: item.case_name ?? "单 Case",
-                            status: item.status,
-                            run_uuid: item.run_uuid,
-                            total_steps: runDetails[item.run_uuid].run.total_steps,
-                            passed_steps: runDetails[item.run_uuid].run.steps.filter((s) => s.status === "success")
-                              .length,
-                            error: runDetails[item.run_uuid].run.error,
-                          },
-                          item.exec_mode === "code" ? "code" : "position",
-                          key,
-                          { showVerify: item.exec_mode === "position" }
-                        )}
-                    </>
+                      }
+                    )
                   )}
-                </div>
-              )}
-            </article>
-          );
-        })}
+
+                {selectedIsSingle && selectedItem.run_uuid && (
+                  <>
+                    {loadingRunId === selectedItem.run_uuid && !runDetails[selectedItem.run_uuid] && (
+                      <div className="result-empty">加载截图与回放数据...</div>
+                    )}
+                    {runDetails[selectedItem.run_uuid] &&
+                      renderCaseResult(
+                        {
+                          case_id: selectedItem.case_id ?? 0,
+                          case_name: selectedItem.case_name ?? "单 Case",
+                          status: selectedItem.status,
+                          run_uuid: selectedItem.run_uuid,
+                          total_steps: runDetails[selectedItem.run_uuid].run.total_steps,
+                          passed_steps: runDetails[selectedItem.run_uuid].run.steps.filter(
+                            (s) => s.status === "success"
+                          ).length,
+                          error: runDetails[selectedItem.run_uuid].run.error,
+                        },
+                        selectedItem.exec_mode === "code" ? "code" : "position",
+                        { showVerify: selectedItem.exec_mode === "position" || selectedItem.exec_mode === "code" }
+                      )}
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </main>
       </div>
     </section>
   );

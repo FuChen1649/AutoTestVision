@@ -1,0 +1,186 @@
+.exec-shell {
+  background: transparent;
+}
+
+.exec-shell-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(135deg, rgba(45, 212, 191, 0.05) 0%, transparent 40%),
+    linear-gradient(180deg, rgba(20, 28, 44, 0.6) 0%, transparent 100%);
+}
+
+.exec-shell-kicker {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.exec-shell-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.exec-shell-title-row h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.exec-shell-case {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.exec-shell-case.muted {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+}
+
+.exec-shell-run {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.exec-shell-intro p {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 520px;
+  line-height: 1.45;
+}
+
+.exec-shell-flow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.exec-shell-flow .sep {
+  opacity: 0.4;
+}
+
+.exec-shell-flow .active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.exec-shell-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.exec-path-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-width: 280px;
+}
+
+.exec-path-switch-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+  min-width: 360px;
+}
+
+.exec-path-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur), background var(--dur), box-shadow var(--dur);
+}
+
+.exec-path-btn strong {
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.exec-path-btn span {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.exec-path-btn.dual:hover {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.exec-path-btn.pos.active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: var(--pos-soft);
+  color: var(--pos);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.15);
+}
+
+.exec-path-btn.code.active {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: var(--code-soft);
+  color: var(--code);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.15);
+}
+
+.exec-path-btn:hover:not(.active) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.exec-shell-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.exec-shell-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .exec-shell-actions {
+    align-items: stretch;
+    width: 100%;
+  }
+  .exec-path-switch {
+    min-width: 0;
+  }
+}

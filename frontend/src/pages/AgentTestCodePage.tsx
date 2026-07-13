@@ -247,7 +247,10 @@ export default function AgentTestCodePage({ bootstrap, onBootstrapConsumed, init
     <section className="agent-test-page">
       <header className="agent-test-toolbar">
         <div className="agent-test-toolbar-left">
-          <span className="agent-test-toolbar-title">AgentTest_Code</span>
+          <span className="agent-test-toolbar-title">
+            <span className="agent-path-dot code" />
+            Code 执行
+          </span>
           {run && (
             <span className="agent-test-run-badge">
               {run.case_name} · {run.status} · 步骤 {(activeStepOrder ?? run.current_step_index) + 1}/

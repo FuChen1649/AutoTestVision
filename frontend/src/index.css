@@ -1,9 +1,71 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap");
+
 :root {
-  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Surfaces */
+  --bg-root: #070b12;
+  --bg-canvas: #0a101a;
+  --bg-panel: #0e1522;
+  --bg-elevated: #141c2c;
+  --bg-hover: rgba(45, 212, 191, 0.06);
+  --bg-active: rgba(45, 212, 191, 0.12);
+
+  /* Borders */
+  --border: #1a2436;
+  --border-strong: #2a3a52;
+  --border-focus: #2dd4bf;
+
+  /* Text */
+  --text: #e8eef7;
+  --text-secondary: #9aa8bc;
+  --text-muted: #6b7a90;
+  --text-inverse: #061018;
+
+  /* Brand / accent — teal (vision / precision) */
+  --accent: #2dd4bf;
+  --accent-dim: #14b8a6;
+  --accent-glow: rgba(45, 212, 191, 0.22);
+  --accent-soft: rgba(45, 212, 191, 0.1);
+
+  /* Path colors */
+  --pos: #38bdf8;
+  --pos-soft: rgba(56, 189, 248, 0.12);
+  --code: #34d399;
+  --code-soft: rgba(52, 211, 153, 0.12);
+
+  /* Status */
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.12);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.12);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.12);
+
+  /* Typography */
+  --font-sans: "Sora", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Radius / shadow / motion */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 180ms;
+
+  /* Layout */
+  --sidebar-w: 248px;
+  --sidebar-collapsed: 72px;
+  --header-h: 56px;
+
+  font-family: var(--font-sans);
   line-height: 1.5;
   font-weight: 400;
-  color: #e5e7eb;
-  background-color: #0b1220;
+  color: var(--text);
+  background-color: var(--bg-root);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -21,8 +83,12 @@ body {
 
 body {
   margin: 0;
-  min-width: 1280px;
+  min-width: 1100px;
   overflow: hidden;
+  background:
+    radial-gradient(1200px 600px at 12% -10%, rgba(45, 212, 191, 0.07), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(56, 189, 248, 0.05), transparent 50%),
+    var(--bg-root);
 }
 
 #root {
@@ -39,4 +105,29 @@ select {
 
 button {
   cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-glow);
+  color: var(--text);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }

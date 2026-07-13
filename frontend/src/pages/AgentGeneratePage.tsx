@@ -523,81 +523,121 @@ export default function AgentGeneratePage() {
 
   return (
     <div className="platform-page dual-gen-page">
-      <div className="dual-gen-toolbar">
-        <select
-          className="platform-select"
-          value={selectedCaseId ?? ""}
-          onChange={(e) => setSelectedCaseId(Number(e.target.value))}
-        >
-          {cases.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <select
-          className="platform-select"
-          value={selectedProvider}
-          onChange={(e) => setSelectedProvider(e.target.value)}
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="platform-select dual-gen-device-select"
-          value={positionSerial}
-          disabled={generating || !prerequisites?.devices.length}
-          onChange={(e) => handlePositionDeviceChange(e.target.value)}
-          title="Position 坐标脚本在此设备执行"
-        >
-          {(prerequisites?.devices ?? []).map((d) => (
-            <option key={`pos-${d.serial}`} value={d.serial} disabled={d.serial === codeSerial}>
-              Pos · {d.model || d.serial.slice(-8)} ({d.serial.slice(-6)})
-            </option>
-          ))}
-        </select>
-        <select
-          className="platform-select dual-gen-device-select"
-          value={codeSerial}
-          disabled={generating || !prerequisites?.devices.length}
-          onChange={(e) => handleCodeDeviceChange(e.target.value)}
-          title="Code u2 脚本在此设备执行"
-        >
-          {(prerequisites?.devices ?? []).map((d) => (
-            <option key={`code-${d.serial}`} value={d.serial} disabled={d.serial === positionSerial}>
-              Code · {d.model || d.serial.slice(-8)} ({d.serial.slice(-6)})
-            </option>
-          ))}
-        </select>
-        <button
-          className="platform-btn platform-btn-primary"
-          type="button"
-          disabled={!canGenerate || generating}
-          onClick={() => void handleGenerate()}
-        >
-          {generating ? "生成中" : "开始"}
-        </button>
-        {selectedCaseId && (
-          <Link className="platform-btn" to={`/agent/execute/${selectedCaseId}`}>
-            执行
+      <div className="dual-gen-path-bar">
+        <div className="exec-path-switch exec-path-switch-3" role="tablist" aria-label="执行路径">
+          <button type="button" role="tab" aria-selected className="exec-path-btn dual active">
+            <strong>Dual</strong>
+            <span>双脚本生成</span>
+          </button>
+          <Link
+            role="tab"
+            className="exec-path-btn pos"
+            to={selectedCaseId ? `/agent/execute/${selectedCaseId}?mode=position` : "/agent/execute?mode=position"}
+          >
+            <strong>Position</strong>
+            <span>视觉坐标</span>
           </Link>
-        )}
-        <div
-          className={`dual-gen-status ${prerequisites?.ready ? "ok" : "warn"}`}
-          title={prerequisites?.message}
-        >
-          {prerequisites?.ready
-            ? `双路径并行 · Pos ${positionSerial.slice(-6)} · Code ${codeSerial.slice(-6)}`
-            : `${prerequisites?.device_count ?? 0}/2 台 · ${prerequisites?.message ?? "检测中"}`}
-          {progressText ? ` · ${progressText}` : ""}
+          <Link
+            role="tab"
+            className="exec-path-btn code"
+            to={selectedCaseId ? `/agent/execute/${selectedCaseId}?mode=code` : "/agent/execute?mode=code"}
+          >
+            <strong>Code</strong>
+            <span>u2 选择器</span>
+          </Link>
+        </div>
+      </div>
+      <div className="dual-gen-hero">
+        <div className="dual-gen-hero-top">
+          <div className="dual-gen-hero-copy">
+            <h2>Dual · 双路径并行生成</h2>
+            <p>Position 与 Code 各自独立推进步骤；断言步会协调验证，失败即终止 Case。</p>
+          </div>
+          <div className="dual-gen-progress-pills">
+            <span className="dual-gen-pill pos">
+              Pos {positionDone}/{totalSteps || "—"}
+            </span>
+            <span className="dual-gen-pill code">
+              Code {codeDone}/{totalSteps || "—"}
+            </span>
+          </div>
+        </div>
+        <div className="dual-gen-toolbar">
+          <select
+            className="platform-select"
+            value={selectedCaseId ?? ""}
+            onChange={(e) => setSelectedCaseId(Number(e.target.value))}
+          >
+            {cases.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <select
+            className="platform-select"
+            value={selectedProvider}
+            onChange={(e) => setSelectedProvider(e.target.value)}
+          >
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="platform-select dual-gen-device-select"
+            value={positionSerial}
+            disabled={generating || !prerequisites?.devices.length}
+            onChange={(e) => handlePositionDeviceChange(e.target.value)}
+            title="Position 坐标脚本在此设备执行"
+          >
+            {(prerequisites?.devices ?? []).map((d) => (
+              <option key={`pos-${d.serial}`} value={d.serial} disabled={d.serial === codeSerial}>
+                Pos · {d.model || d.serial.slice(-8)} ({d.serial.slice(-6)})
+              </option>
+            ))}
+          </select>
+          <select
+            className="platform-select dual-gen-device-select"
+            value={codeSerial}
+            disabled={generating || !prerequisites?.devices.length}
+            onChange={(e) => handleCodeDeviceChange(e.target.value)}
+            title="Code u2 脚本在此设备执行"
+          >
+            {(prerequisites?.devices ?? []).map((d) => (
+              <option key={`code-${d.serial}`} value={d.serial} disabled={d.serial === positionSerial}>
+                Code · {d.model || d.serial.slice(-8)} ({d.serial.slice(-6)})
+              </option>
+            ))}
+          </select>
+          <button
+            className="platform-btn platform-btn-primary"
+            type="button"
+            disabled={!canGenerate || generating}
+            onClick={() => void handleGenerate()}
+          >
+            {generating ? "生成中…" : "开始生成"}
+          </button>
+          {selectedCaseId && (
+            <Link className="platform-btn" to={`/agent/execute/${selectedCaseId}`}>
+              下一步 · Position / Code
+            </Link>
+          )}
+          <div
+            className={`dual-gen-status ${prerequisites?.ready ? "ok" : "warn"}`}
+            title={prerequisites?.message}
+          >
+            {prerequisites?.ready
+              ? `就绪 · Pos ${positionSerial.slice(-6)} · Code ${codeSerial.slice(-6)}`
+              : `${prerequisites?.device_count ?? 0}/2 台 · ${prerequisites?.message ?? "检测中"}`}
+            {progressText ? ` · ${progressText}` : ""}
+          </div>
         </div>
       </div>
 
       {error && (
-        <div className="platform-error" style={{ marginBottom: 8, padding: "8px 10px" }}>
+        <div className="platform-error" style={{ margin: "8px 12px 0" }}>
           {error}
         </div>
       )}
@@ -605,7 +645,7 @@ export default function AgentGeneratePage() {
       <div className="dual-gen-split">
         <PathColumn
           title="Position"
-          tint="#3b82f6"
+          tint="var(--pos)"
           steps={positionSteps}
           viewStep={positionViewStep}
           viewOrder={positionViewOrder}
@@ -623,7 +663,7 @@ export default function AgentGeneratePage() {
         />
         <PathColumn
           title="Code"
-          tint="#10b981"
+          tint="var(--code)"
           steps={codeSteps}
           viewStep={codeViewStep}
           viewOrder={codeViewOrder}

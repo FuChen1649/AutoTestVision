@@ -32,15 +32,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: "/cases", label: "Case 管理", description: "列表、创建与编辑测试 Case", matchPrefix: "/cases" },
       { path: "/tasks", label: "任务中心", description: "统一查看与管理执行任务", matchPrefix: "/tasks" },
       {
-        path: "/agent/generate",
-        label: "双脚本生成",
-        description: "从自然语言同时生成 Position 与 Code 脚本",
-        matchPrefix: "/agent/generate",
-      },
-      {
         path: "/agent/execute",
         label: "执行工作台",
-        description: "Position / Code 双路径执行与回放",
+        description: "Dual / Position / Code 生成与执行",
         matchPrefix: "/agent/execute",
       },
       { path: "/batch", label: "跑批管理", description: "批量执行 Case 任务", matchPrefix: "/batch" },
@@ -72,11 +66,9 @@ export function isNavActive(pathname: string, item: NavItem): boolean {
   if (prefix === "/cases") {
     return pathname === "/cases" || pathname.startsWith("/cases/");
   }
-  if (prefix === "/agent/generate") {
-    return pathname.startsWith("/agent/generate");
-  }
   if (prefix === "/agent/execute") {
-    return pathname.startsWith("/agent/execute");
+    // Dual 双脚本生成挂在执行工作台下，共用高亮
+    return pathname.startsWith("/agent/execute") || pathname.startsWith("/agent/generate");
   }
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
