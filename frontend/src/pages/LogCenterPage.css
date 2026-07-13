@@ -459,6 +459,126 @@ button.log-tree-row.branch:hover {
   padding-top: 10px;
 }
 
+.log-image-gallery {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-canvas);
+  padding: 10px 12px 12px;
+}
+
+.log-image-gallery-title {
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.log-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.log-image-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #05080f;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.log-image-card:hover {
+  border-color: rgba(45, 212, 191, 0.45);
+  color: var(--text);
+}
+
+.log-image-card img {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
+  background: #000;
+  border-radius: 4px;
+}
+
+.log-image-card span {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+.log-tree-image-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-family: var(--font-mono);
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.log-tree-image-link:hover {
+  color: var(--text);
+}
+
+.log-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 6, 14, 0.78);
+  backdrop-filter: blur(4px);
+}
+
+.log-lightbox-card {
+  width: min(920px, 100%);
+  max-height: min(92vh, 960px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.log-lightbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.log-lightbox-head strong {
+  font-size: 0.9rem;
+}
+
+.log-lightbox-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.log-lightbox-img {
+  display: block;
+  width: 100%;
+  max-height: calc(92vh - 88px);
+  object-fit: contain;
+  background: #000;
+  border-radius: var(--radius);
+}
+
 .log-embed-message {
   padding: 10px 12px;
   border-radius: var(--radius);

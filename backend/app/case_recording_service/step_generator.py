@@ -117,6 +117,9 @@ class RecordingStepGenerator:
                     "event_uuid": event.event_uuid,
                     "description": description,
                     "source": source,
+                    "before_image": event.before_image_path,
+                    "after_image": event.after_image_path,
+                    "screen_image_url": screen_url,
                     **llm_meta,
                 },
             )

@@ -48,7 +48,11 @@ function summarizeDetail(detail: Record<string, unknown> | null): string {
     const val = detail[key];
     if (val == null) continue;
     if (typeof val === "string") {
-      preview.push(`${key}=${val.length > 48 ? `${val.slice(0, 48)}…` : val}`);
+      if (looksLikeImagePayload(val)) {
+        preview.push(`${key}=[image]`);
+      } else {
+        preview.push(`${key}=${val.length > 48 ? `${val.slice(0, 48)}…` : val}`);
+      }
     } else if (typeof val === "number" || typeof val === "boolean") {
       preview.push(`${key}=${val}`);
     } else if (Array.isArray(val)) {
@@ -93,18 +97,219 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const IMAGE_FIELD_LABELS: Record<string, string> = {
+  before_image: "执行前",
+  after_image: "执行后",
+  before_image_annotated: "标注·执行前",
+  after_image_annotated: "标注·执行后",
+  screen_image: "屏幕",
+  screen_image_url: "处理图",
+  display_image: "处理图",
+  screenshot: "截图",
+  screenshot_url: "截图",
+  annotated_screenshot_url: "标注截图",
+  annotated_image: "标注图",
+  image: "图片",
+};
+
+type LogImageRef = {
+  key: string;
+  label: string;
+  src: string;
+};
+
+function looksLikeImagePayload(value: string): boolean {
+  if (value.startsWith("data:image/")) return true;
+  if (/^https?:\/\//i.test(value) && /\.(png|jpe?g|webp|gif)(\?|#|$)/i.test(value)) return true;
+  if (value.startsWith("/api/") && /\.(png|jpe?g|webp|gif)(\?|#|$)/i.test(value)) return true;
+  if (/^[A-Za-z0-9._-]+\.(png|jpe?g|webp|gif)$/i.test(value)) return true;
+  // bare base64 screenshot payloads commonly appear in Dual logs
+  if (value.length > 800 && /^[A-Za-z0-9+/=\r\n]+$/.test(value.slice(0, 200))) return true;
+  return false;
+}
+
+function resolveImageSrc(value: string, sessionUuid?: string | null): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("data:image/")) return trimmed;
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("/api/")) return trimmed;
+  if (/^[A-Za-z0-9._-]+\.(png|jpe?g|webp|gif)$/i.test(trimmed) && sessionUuid) {
+    return `/api/case-recording/sessions/${encodeURIComponent(sessionUuid)}/assets/${encodeURIComponent(trimmed)}`;
+  }
+  if (trimmed.length > 800 && /^[A-Za-z0-9+/=\r\n]+$/.test(trimmed.slice(0, 200))) {
+    return `data:image/png;base64,${trimmed.replace(/\s/g, "")}`;
+  }
+  return null;
+}
+
+function imageFieldLabel(key: string): string {
+  return IMAGE_FIELD_LABELS[key] ?? key;
+}
+
+function extractLogImages(
+  detail: Record<string, unknown> | null | undefined,
+  sessionUuid?: string | null
+): LogImageRef[] {
+  if (!detail) return [];
+  const found: LogImageRef[] = [];
+  const seen = new Set<string>();
+
+  const visit = (node: unknown, path: string) => {
+    if (typeof node === "string") {
+      if (!looksLikeImagePayload(node)) return;
+      const src = resolveImageSrc(node, sessionUuid);
+      if (!src || seen.has(src)) return;
+      seen.add(src);
+      const leaf = path.split(".").pop() || path;
+      found.push({ key: path, label: imageFieldLabel(leaf), src });
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    if (isPlainObject(node)) {
+      for (const [childKey, childVal] of Object.entries(node)) {
+        const nextPath = path ? `${path}.${childKey}` : childKey;
+        // skip obvious non-image flags
+        if (childKey === "annotated_image" && typeof childVal === "boolean") continue;
+        visit(childVal, nextPath);
+      }
+    }
+  };
+
+  visit(detail, "");
+  return found;
+}
+
+function redactDetailForTree(
+  detail: Record<string, unknown>,
+  sessionUuid?: string | null
+): Record<string, unknown> {
+  const walk = (node: unknown): unknown => {
+    if (typeof node === "string") {
+      if (!looksLikeImagePayload(node)) return node;
+      const src = resolveImageSrc(node, sessionUuid);
+      return src ? { __log_image__: true, src, preview: valuePreview(node) } : node;
+    }
+    if (Array.isArray(node)) return node.map(walk);
+    if (isPlainObject(node)) {
+      const out: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(node)) {
+        out[key] = walk(val);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(detail) as Record<string, unknown>;
+}
+
+function LogImageLightbox({
+  src,
+  label,
+  onClose,
+}: {
+  src: string;
+  label: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="log-lightbox" onClick={onClose} role="presentation">
+      <div className="log-lightbox-card" onClick={(event) => event.stopPropagation()} role="dialog">
+        <div className="log-lightbox-head">
+          <strong>{label}</strong>
+          <div className="log-lightbox-actions">
+            <a className="platform-btn" href={src} target="_blank" rel="noreferrer">
+              新窗口打开
+            </a>
+            <button className="platform-btn" type="button" onClick={onClose}>
+              关闭
+            </button>
+          </div>
+        </div>
+        <img className="log-lightbox-img" src={src} alt={label} />
+      </div>
+    </div>
+  );
+}
+
+function LogImageGallery({
+  images,
+}: {
+  images: LogImageRef[];
+}) {
+  const [active, setActive] = useState<LogImageRef | null>(null);
+  if (images.length === 0) return null;
+
+  return (
+    <div className="log-image-gallery">
+      <div className="log-image-gallery-title">相关图片 · {images.length}</div>
+      <div className="log-image-grid">
+        {images.map((image) => (
+          <button
+            key={`${image.key}:${image.src.slice(0, 48)}`}
+            type="button"
+            className="log-image-card"
+            onClick={() => setActive(image)}
+            title={`查看 ${image.label}`}
+          >
+            <img src={image.src} alt={image.label} loading="lazy" />
+            <span>{image.label}</span>
+          </button>
+        ))}
+      </div>
+      {active && (
+        <LogImageLightbox src={active.src} label={active.label} onClose={() => setActive(null)} />
+      )}
+    </div>
+  );
+}
+
 function LogTreeNode({
   label,
   value,
   depth = 0,
   defaultOpen = false,
+  onOpenImage,
 }: {
   label: string;
   value: unknown;
   depth?: number;
   defaultOpen?: boolean;
+  onOpenImage?: (src: string, label: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const imageMarker =
+    isPlainObject(value) && value.__log_image__ === true && typeof value.src === "string"
+      ? (value as { src: string; preview?: string })
+      : null;
+
+  if (imageMarker) {
+    return (
+      <div className="log-tree-node" style={{ paddingLeft: depth * 14 }}>
+        <div className="log-tree-row leaf image">
+          <span className="log-tree-key">{label}</span>
+          <button
+            type="button"
+            className="log-tree-image-link"
+            onClick={() => onOpenImage?.(imageMarker.src, imageFieldLabel(label))}
+          >
+            查看图片
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const complex = isPlainObject(value) || Array.isArray(value);
 
   if (!complex) {
@@ -156,6 +361,7 @@ function LogTreeNode({
                 value={childVal}
                 depth={depth + 1}
                 defaultOpen={false}
+                onOpenImage={onOpenImage}
               />
             ))
           )}
@@ -166,6 +372,16 @@ function LogTreeNode({
 }
 
 function LogEntryEmbeddedDetail({ log }: { log: LogEntry }) {
+  const images = useMemo(
+    () => extractLogImages(log.detail, log.session_uuid),
+    [log.detail, log.session_uuid]
+  );
+  const treeDetail = useMemo(
+    () => (log.detail ? redactDetailForTree(log.detail, log.session_uuid) : null),
+    [log.detail, log.session_uuid]
+  );
+  const [lightbox, setLightbox] = useState<{ src: string; label: string } | null>(null);
+
   return (
     <div className="log-embed-detail">
       <div className="log-embed-message">{log.message || "—"}</div>
@@ -195,19 +411,50 @@ function LogEntryEmbeddedDetail({ log }: { log: LogEntry }) {
           <span className="mono">{log.session_uuid ?? "—"}</span>
         </div>
       </div>
-      {log.detail ? (
+
+      <LogImageGallery images={images} />
+
+      {treeDetail ? (
         <div className="log-tree" key={entryKey(log)}>
-          {Object.entries(log.detail).map(([key, value]) => (
-            <LogTreeNode key={key} label={key} value={value} defaultOpen={false} />
+          {Object.entries(treeDetail).map(([key, value]) => (
+            <LogTreeNode
+              key={key}
+              label={key}
+              value={value}
+              defaultOpen={false}
+              onOpenImage={(src, label) => setLightbox({ src, label })}
+            />
           ))}
         </div>
       ) : (
         <div className="log-inspector-empty">无结构化 detail</div>
       )}
       <details className="log-embed-raw">
-        <summary>原始 JSON</summary>
-        <pre className="log-json">{JSON.stringify(log, null, 2)}</pre>
+        <summary>原始 JSON（图片字段已折叠为链接提示）</summary>
+        <pre className="log-json">
+          {JSON.stringify(
+            treeDetail
+              ? Object.fromEntries(
+                  Object.entries(treeDetail).map(([key, value]) => {
+                    if (isPlainObject(value) && value.__log_image__) {
+                      return [key, `[image] ${imageFieldLabel(key)}`];
+                    }
+                    return [key, value];
+                  })
+                )
+              : log,
+            null,
+            2
+          )}
+        </pre>
       </details>
+      {lightbox && (
+        <LogImageLightbox
+          src={lightbox.src}
+          label={lightbox.label}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }
