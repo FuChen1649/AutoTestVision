@@ -91,6 +91,9 @@ export function SourceChip({ source }: { source: string }) {
     code: "code",
     script_gen: "accent",
     monkey: "warn",
+    case_recording: "warn",
   };
-  return <span className={`ops-chip ${map[source] ?? "muted"}`}>{source}</span>;
+  const label =
+    source === "case_recording" ? "recording" : source === "script_gen" ? "dual" : source;
+  return <span className={`ops-chip ${map[source] ?? "muted"}`}>{label}</span>;
 }

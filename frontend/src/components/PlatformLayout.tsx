@@ -16,7 +16,7 @@ function breadcrumbLabel(pathname: string): string {
   if (pathname === "/tasks") return "任务中心";
   if (pathname === "/batch") return "跑批管理";
   if (pathname === "/reports") return "报告中心";
-  if (pathname === "/logs") return "日志中心";
+  if (pathname.startsWith("/logs")) return "日志中心";
   if (pathname === "/devices") return "设备管理";
   if (pathname === "/resources") return "资源依赖";
   if (pathname === "/monkey") return "AgentMonkeyTest";
