@@ -14,6 +14,7 @@ interface DeviceNavKeysProps {
   layout: ScreenLayout;
   disabled?: boolean;
   onError?: (message: string | null) => void;
+  onKeyPress?: (key: NavKey) => Promise<void>;
 }
 
 type NavKey = "back" | "home" | "recents";
@@ -60,6 +61,7 @@ export default function DeviceNavKeys({
   layout,
   disabled = false,
   onError,
+  onKeyPress,
 }: DeviceNavKeysProps) {
   const [pressing, setPressing] = useState<NavKey | null>(null);
 
@@ -95,7 +97,11 @@ export default function DeviceNavKeys({
     }
     setPressing(key);
     try {
-      await api.pressDeviceKey(key, serial);
+      if (onKeyPress) {
+        await onKeyPress(key);
+      } else {
+        await api.pressDeviceKey(key, serial);
+      }
       onError?.(null);
     } catch (err) {
       onError?.(err instanceof Error ? err.message : "按键发送失败");

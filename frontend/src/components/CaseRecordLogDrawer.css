@@ -1,0 +1,226 @@
+.case-record-log-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(2, 6, 23, 0.55);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.case-record-log-drawer {
+  width: min(920px, 96vw);
+  height: 100%;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.25);
+}
+
+.case-record-log-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.case-record-log-kicker {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.case-record-log-header h3 {
+  margin: 0 0 4px;
+}
+
+.case-record-log-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.case-record-log-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.case-record-log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.case-record-log-toolbar .platform-input {
+  min-width: 180px;
+}
+
+.case-record-log-live {
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+
+.case-record-log-error {
+  margin: 0 20px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fecaca;
+  font-size: 0.84rem;
+}
+
+.case-record-log-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.1fr);
+}
+
+.case-record-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.case-record-log-item {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+.case-record-log-item.active {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: var(--accent-soft);
+}
+
+.case-record-log-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.case-record-log-type {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+}
+
+.case-record-log-type.type-llm_input,
+.case-record-log-type.type-llm_output {
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.case-record-log-type.type-step_result {
+  color: var(--accent);
+  border-color: rgba(45, 212, 191, 0.35);
+  background: var(--accent-soft);
+}
+
+.case-record-log-type.type-capture {
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.case-record-log-type.type-error,
+.case-record-log-type.type-llm_error,
+.case-record-log-type.type-llm_parse_error {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.case-record-log-step,
+.case-record-log-time {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.case-record-log-message {
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.case-record-log-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.case-record-log-detail {
+  padding: 16px 18px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.case-record-log-detail-empty {
+  color: var(--text-muted);
+  padding: 24px 0;
+}
+
+.case-record-log-detail h4 {
+  margin: 10px 0 14px;
+  font-size: 0.95rem;
+}
+
+.case-record-log-block {
+  margin-bottom: 14px;
+}
+
+.case-record-log-block-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.case-record-log-pre {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: #0b1220;
+  color: #dbeafe;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
+}
+
+@media (max-width: 760px) {
+  .case-record-log-body {
+    grid-template-columns: 1fr;
+  }
+
+  .case-record-log-list {
+    max-height: 240px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}

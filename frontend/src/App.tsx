@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import PlatformLayout from "./components/PlatformLayout";
 import CaseBuilderPage from "./pages/CaseBuilderPage";
+import CaseRecordPage from "./pages/CaseRecordPage";
 import CaseListPage from "./pages/CaseListPage";
 import TaskCenterPage from "./pages/TaskCenterPage";
 import AgentGeneratePage from "./pages/AgentGeneratePage";
@@ -22,6 +23,7 @@ export default function App() {
         <Route element={<PlatformLayout />}>
           <Route index element={<Navigate to="/cases" replace />} />
           <Route path="cases" element={<CaseListPage />} />
+          <Route path="cases/record" element={<CaseRecordPage />} />
           <Route path="cases/new" element={<CaseBuilderPage />} />
           <Route path="cases/:caseId/edit" element={<CaseBuilderPage />} />
           <Route path="tasks" element={<TaskCenterPage />} />

@@ -4,12 +4,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import agent_monkey, agent_test, agent_test_code, batch, case_live, cases, device, flywheel, logs, reports, result_verify, script_generation, tasks
+from app.api import agent_monkey, agent_test, agent_test_code, batch, case_live, case_recording, cases, device, flywheel, logs, reports, result_verify, script_generation, tasks
 from app.config import settings
 from app.database import Base, async_session, engine
 from app.models import agent as _agent_models  # noqa: F401
 from app.models import agent_code as _agent_code_models  # noqa: F401
 from app.models import case_assertion as _case_assertion_models  # noqa: F401
+from app.models import case_recording as _case_recording_models  # noqa: F401
 from app.models import flywheel as _flywheel_models  # noqa: F401
 from app.models import monkey as _monkey_models  # noqa: F401
 from app.models import platform_log as _platform_log_models  # noqa: F401
@@ -64,6 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(case_recording.router, prefix="/api")
 app.include_router(cases.router, prefix="/api")
 app.include_router(case_live.router, prefix="/api")
 app.include_router(device.router, prefix="/api")

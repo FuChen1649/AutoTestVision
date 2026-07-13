@@ -1,0 +1,258 @@
+.case-record-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+}
+
+.case-record-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 0 4px;
+}
+
+.case-record-kicker {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.case-record-header h2 {
+  margin: 0 0 6px;
+  font-size: 1.2rem;
+}
+
+.case-record-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  max-width: 52ch;
+}
+
+.case-record-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.case-record-error {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fecaca;
+  font-size: 0.88rem;
+}
+
+.case-record-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+}
+
+.case-record-screen {
+  position: relative;
+  min-height: 0;
+}
+
+.case-record-screen .device-panel {
+  height: 100%;
+}
+
+.case-record-action-overlay {
+  position: absolute;
+  inset: auto 12px 12px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid var(--border-strong);
+  color: var(--accent);
+  font-size: 0.82rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.case-record-panel {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.case-record-section {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.case-record-section h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.case-record-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.case-record-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.case-record-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.case-record-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+}
+
+.case-record-badge.recording {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.case-record-badge.review {
+  color: var(--accent);
+  border-color: rgba(45, 212, 191, 0.35);
+  background: var(--accent-soft);
+}
+
+.case-record-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.case-record-event-list,
+.case-record-draft-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.case-record-event-item,
+.case-record-draft-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.case-record-event-no {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.case-record-event-body,
+.case-record-draft-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.case-record-event-title {
+  font-size: 0.86rem;
+}
+
+.case-record-event-thumb {
+  width: 100%;
+  max-width: 220px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: #0b1220;
+}
+
+.case-record-event-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.case-record-step-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  font-size: 0.88rem;
+}
+
+.case-record-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.case-record-generating {
+  align-items: center;
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.case-record-spinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: case-record-spin 0.8s linear infinite;
+}
+
+@keyframes case-record-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.case-record-saved {
+  align-items: flex-start;
+}
+
+@media (max-width: 960px) {
+  .case-record-layout {
+    grid-template-columns: 1fr;
+  }
+}

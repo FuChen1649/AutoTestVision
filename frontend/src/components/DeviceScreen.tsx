@@ -4,6 +4,12 @@ import AppPermissionControls from "./AppPermissionControls";
 import DeviceNavKeys from "./DeviceNavKeys";
 import type { DeviceInfo, ScreenFrame } from "../types";
 
+export type DeviceInteraction =
+  | { type: "tap"; x: number; y: number }
+  | { type: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs: number }
+  | { type: "long_press"; x: number; y: number; durationMs: number }
+  | { type: "key"; key: "back" | "home" | "recents" };
+
 interface DeviceScreenProps {
   devices: DeviceInfo[];
   selectedSerial: string | null;
@@ -15,6 +21,8 @@ interface DeviceScreenProps {
   showNavKeys?: boolean;
   highlightCenter?: { x: number; y: number } | null;
   highlightBBox?: { x: number; y: number; w: number; h: number } | null;
+  onInteraction?: (interaction: DeviceInteraction) => Promise<void>;
+  interactionDisabled?: boolean;
 }
 
 interface ViewportSize {
@@ -52,6 +60,8 @@ export default function DeviceScreen({
   showNavKeys = false,
   highlightCenter = null,
   highlightBBox = null,
+  onInteraction,
+  interactionDisabled = false,
 }: DeviceScreenProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -395,12 +405,21 @@ export default function DeviceScreen({
     paintCanvas();
 
     try {
-      await api.longPress(start.deviceX, start.deviceY, LONG_PRESS_DURATION_MS, serial);
+      if (onInteraction) {
+        await onInteraction({
+          type: "long_press",
+          x: start.deviceX,
+          y: start.deviceY,
+          durationMs: LONG_PRESS_DURATION_MS,
+        });
+      } else {
+        await api.longPress(start.deviceX, start.deviceY, LONG_PRESS_DURATION_MS, serial);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "长按失败");
     }
-  }, [paintCanvas]);
+  }, [onInteraction, paintCanvas]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const coords = toDeviceCoords(event.clientX, event.clientY);
@@ -468,7 +487,20 @@ export default function DeviceScreen({
     const displayDistance = Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY);
 
     try {
-      if (displayDistance > TAP_THRESHOLD_PX) {
+      if (onInteraction) {
+        if (displayDistance > TAP_THRESHOLD_PX) {
+          await onInteraction({
+            type: "swipe",
+            x1: start.deviceX,
+            y1: start.deviceY,
+            x2: end.x,
+            y2: end.y,
+            durationMs: 300,
+          });
+        } else {
+          await onInteraction({ type: "tap", x: start.deviceX, y: start.deviceY });
+        }
+      } else if (displayDistance > TAP_THRESHOLD_PX) {
         await api.swipe(start.deviceX, start.deviceY, end.x, end.y, 300, selectedSerial);
       } else {
         await api.tap(start.deviceX, start.deviceY, selectedSerial);
@@ -526,11 +558,11 @@ export default function DeviceScreen({
           <canvas
             ref={canvasRef}
             className="device-canvas"
-            onPointerDown={readOnly ? undefined : handlePointerDown}
-            onPointerMove={readOnly ? undefined : handlePointerMove}
-            onPointerUp={readOnly ? undefined : handlePointerUp}
-            onPointerCancel={readOnly ? undefined : handlePointerCancel}
-            style={readOnly ? { cursor: "default" } : undefined}
+            onPointerDown={readOnly || interactionDisabled ? undefined : handlePointerDown}
+            onPointerMove={readOnly || interactionDisabled ? undefined : handlePointerMove}
+            onPointerUp={readOnly || interactionDisabled ? undefined : handlePointerUp}
+            onPointerCancel={readOnly || interactionDisabled ? undefined : handlePointerCancel}
+            style={readOnly || interactionDisabled ? { cursor: "default" } : undefined}
           />
           {!selectedSerial && (
             <div className="device-placeholder">
@@ -543,8 +575,15 @@ export default function DeviceScreen({
               serial={selectedSerial}
               viewportWidth={viewportSize.width}
               layout={screenLayout}
-              disabled={!connected}
+              disabled={!connected || interactionDisabled}
               onError={(message) => setError(message || null)}
+              onKeyPress={
+                onInteraction
+                  ? async (key) => {
+                      await onInteraction({ type: "key", key });
+                    }
+                  : undefined
+              }
             />
           )}
         </div>

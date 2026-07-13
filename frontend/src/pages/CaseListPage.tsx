@@ -94,6 +94,9 @@ export default function CaseListPage() {
             <Link className="platform-btn platform-btn-primary" to="/cases/new">
               新建 Case
             </Link>
+            <Link className="platform-btn" to="/cases/record">
+              录制生成
+            </Link>
             <Link className="platform-btn" to="/agent/execute">
               执行工作台
             </Link>
